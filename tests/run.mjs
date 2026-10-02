@@ -13,7 +13,7 @@ import { Lua } from '@luau-rs/luau';
 import { Analysis } from '@luau-rs/luau/analysis';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-for (const f of ['data', 'model', 'engine', 'luau', 'presets']) await import(pathToFileURL(path.join(root, 'js', f + '.js')).href);
+for (const f of ['data', 'anims', 'model', 'engine', 'luau', 'export', 'presets']) await import(pathToFileURL(path.join(root, 'js', f + '.js')).href);
 const SF = globalThis.SF;
 
 const args = process.argv.slice(2);
@@ -38,7 +38,7 @@ function lint(code) {
 }
 
 /* -------------------------------------------------------------- expectations */
-function expectationsFor(cfgIn, mode) {
+function expectationsFor(cfgIn, mode, opts) {
   const model = SF.buildModel(cfgIn);
   const cfg = model.cfg;
   const c = cfg.combat;
@@ -57,7 +57,44 @@ function expectationsFor(cfgIn, mode) {
   const parts = fx.filter((e) => e.kind === 'particles');
   const trails = fx.filter((e) => e.kind === 'trail');
   const w = c.wave;
+
+  // animations: what the server should say, how long things take, and the exact poses the animator must reach
+  const data = SF.animData(cfg.anim);
+  const missing = !!(data && opts && opts.animatorMissing);
+  const custom = !!(data && data.swings.length > 0 && !missing);
+  const timing = (id) => {
+    const r = SF.resolveMove(id);
+    return { windup: r.hit[0] * r.dur / data.speed, window: Math.max(0.15, (r.hit[1] - r.hit[0]) * r.dur / data.speed), total: r.dur / data.speed };
+  };
+  let anim = null;
+  if (data && !missing) {
+    const moves = {};
+    Object.keys(data.moves).forEach((id) => { moves[id] = { dur: data.moves[id].dur, keys: data.moves[id].keys.length }; });
+    const samples = [];
+    [...new Set([...data.swings, data.equip].filter(Boolean))].forEach((id) => {
+      const r = SF.resolveMove(id);
+      [0.15, 0.4, 0.65, 0.9].forEach((u) => {
+        const pose = SF.poseAt(r, u);
+        const m = {};
+        SF.ANIM_CH3.forEach((ch) => { m[ch] = SF.math.eulerToMat(pose[ch]); });
+        samples.push({ id, u, dur: r.dur, m, dy: pose.dy, dz: pose.dz });
+      });
+    });
+    anim = { moves, swings: data.swings, idle: data.idle, equip: data.equip, speed: data.speed, samples };
+  }
+  const comboLength = custom ? Math.max(data.swings.length, 3) : 3;
+  const first = custom ? timing(data.swings[0]) : null;
+  const last = custom ? timing(data.swings[(comboLength - 1) % data.swings.length]) : null;
+  const maxWindup = custom ? Math.max(...data.swings.map((id) => timing(id).windup)) : 0.12;
+  const timings = {
+    hasAnim: !!data, customSwings: custom, animatorMissing: missing, comboLength,
+    hitWait: custom ? first.windup + 0.1 : 0.2,
+    swingTail: custom ? Math.max(0.6, first.windup + first.window + 0.3 - (first.windup + 0.1)) : 0.6,
+    finisherWait: custom ? last.windup + 0.25 : 0.25,
+    waveWatch: Math.ceil((maxWindup + 0.5) * 60),
+  };
   return {
+    anim, ...timings,
     mode, name: cfg.name,
     damage: c.damage, cooldown: c.cooldown, swing, finisher: c.finisher,
     firstDamage: swing === 'Lunge' ? c.damage * c.finisher : c.damage,
@@ -83,7 +120,7 @@ function expectationsFor(cfgIn, mode) {
 }
 
 /* ----------------------------------------------------------------- run one */
-async function runOne(label, cfg, mode) {
+async function runOne(label, cfg, mode, opts) {
   const gen = SF.generate(cfg, mode);
   if (dump) fs.writeFileSync(path.join(outDir, `${label.replace(/[^a-z0-9_.-]+/gi, '_')}.${mode}.lua`), gen.code);
   const problems = [];
@@ -94,11 +131,13 @@ async function runOne(label, cfg, mode) {
     if (d.severity === 'error') problems.push(`lint error (line ${line}): ${d.message}`);
     else problems.push(`lint warning ${d.code} (line ${line}): ${d.message}`);
   }
+  if (gen.animator) for (const d of lint(gen.animator)) problems.push(`lint (animator line ${d.location.begin.line + 1}) ${d.severity} ${d.code}: ${d.message}`);
   // the long-string chunk of the command-bar mode is a script of its own: lint it too
   if (mode === 'commandbar') {
     const m = gen.code.match(/local COMBAT_SOURCE = \[(=+)\[\n([\s\S]*?)\]\1\]/);
     if (!m) problems.push('could not find COMBAT_SOURCE');
     else for (const d of lint(m[2])) problems.push(`lint (COMBAT_SOURCE line ${d.location.begin.line + 1}) ${d.severity} ${d.code}: ${d.message}`);
+    if (gen.animator && !/local ANIMATOR_SOURCE = \[(=+)\[\n/.test(gen.code)) problems.push('could not find ANIMATOR_SOURCE');
   }
 
   // 2. run in a Luau VM against the Roblox mock
@@ -110,6 +149,11 @@ async function runOne(label, cfg, mode) {
   lua.globals.set('__loadchunk', lua.createFunction((src) => lua.load(String(src), { name: '=chunk' })));
   try {
     lua.execute(mockSource, { name: '=mock' });
+    lua.execute('Mock.setupStarter()');
+    // script mode: the generated Script has the animator LocalScript as a child, like the Studio file / the manual step
+    lua.globals.set('__animatorSource', gen.animator || '');
+    lua.globals.set('__withAnimator', !(opts && opts.animatorMissing));
+    lua.execute('script = Instance.new("Script"); if __animatorSource ~= "" and __withAnimator then local ls = Instance.new("LocalScript"); ls.Name = "SwordForgeAnimator"; ls.Source = __animatorSource; ls.Parent = script end');
     lua.execute(`
       function __runSource(src, scriptInstance)
         local fn = __loadchunk(src)
@@ -120,7 +164,7 @@ async function runOne(label, cfg, mode) {
     const main = lua.load(gen.code, { name: '=generated' });
     lua.globals.set('__main', main);
     lua.execute('task.spawn(__main)');
-    lua.execute('EXPECT = ' + SF.luaSerialize(expectationsFor(cfg, mode)));
+    lua.execute('EXPECT = ' + SF.luaSerialize(expectationsFor(cfg, mode, opts)));
     lua.execute(scenarioSource, { name: '=scenario' });
   } catch (err) {
     problems.push('VM error: ' + String(err && err.message ? err.message : err).split('\n')[0]);
@@ -193,6 +237,43 @@ SF.POMMEL_STYLES.forEach(([id]) => {
   cases.push({ id: 'garbage-input', cfg });
 }
 
+// animations on every kind of sword; one without animations; the animator missing (falls back to Roblox's swing)
+{
+  const cfg = SF.clone(SF.presetById('flame').cfg);
+  cfg.anim.on = false;
+  cases.push({ id: 'anim-off', cfg });
+}
+{
+  const cfg = SF.defaultConfig();
+  cfg.anim = { on: true, speed: 1.4, idle: 'none', equip: 'none', swings: ['spin'] };
+  cases.push({ id: 'anim-one-swing', cfg });
+}
+{
+  const cfg = SF.defaultConfig();
+  cfg.anim = { on: true, speed: 0.6, idle: 'two_hand', equip: 'twirl', swings: SF.movesOf('swing').slice(0, 6) };
+  cfg.combat.swing = 'combo';
+  cfg.combat.wave.mode = 'finisher';
+  cases.push({ id: 'anim-six-swings', cfg });
+}
+{
+  const cfg = SF.defaultConfig();
+  cfg.anim = { on: true, speed: 1, idle: 'rest', equip: 'salute', swings: [] };
+  cases.push({ id: 'anim-idle-only', cfg });
+}
+['slash', 'lunge'].forEach((st) => {
+  const cfg = SF.defaultConfig();
+  cfg.combat.swing = st;
+  cfg.combat.wave.mode = 'every';
+  cfg.anim = { on: true, speed: 1.8, idle: 'low', equip: 'stomp', swings: ['thrust', 'iaido'] };
+  cases.push({ id: 'anim-' + st, cfg });
+});
+SF.movesOf('swing').forEach((id) => {
+  const cfg = SF.defaultConfig();
+  cfg.anim = { on: true, speed: 1, idle: 'ready', equip: 'draw', swings: [id, id, id] };
+  cases.push({ id: 'move-' + id, cfg });
+});
+cases.push({ id: 'anim-missing', cfg: SF.presetById('flame').cfg, opts: { animatorMissing: true }, scriptOnly: true });
+
 /* ------------------------------------------------------------------- fuzzing */
 // Random swords with values pushed to the edges of every slider, random effect stacks, random enchantments.
 function mulberry32(a) {
@@ -243,6 +324,11 @@ function randomCfg(rnd) {
   SF.ENCHANT_IDS.forEach((id) => { randomParams(SF.ENCHANTS[id].params, rnd, c.enchants[id]); c.enchants[id].on = rnd() < 0.3; });
   randomParams(SF.WAVE_PARAMS, rnd, c.wave);
   cfg.sounds = { swing: rnd() < 0.7, equip: rnd() < 0.7, hit: rnd() < 0.3 ? '1234567' : '' };
+  cfg.anim = {
+    on: rnd() < 0.75, speed: 0.5 + rnd() * 1.3,
+    idle: pick(['none', ...SF.movesOf('idle')]), equip: pick(['none', ...SF.movesOf('equip')]),
+    swings: Array.from({ length: Math.floor(rnd() * 7) }, () => pick(SF.movesOf('swing'))),
+  };
   return cfg;
 }
 {
@@ -257,12 +343,13 @@ const started = Date.now();
 for (const mode of ['script', 'commandbar']) {
   for (const c of cases) {
     if (filter && !(c.id + ':' + mode).includes(filter)) continue;
+    if (c.scriptOnly && mode !== 'script') continue;
     // command-bar mode is slower to read, so cover presets + kitchen sink + a few shapes
-    if (mode === 'commandbar' && !(c.id.startsWith('preset-') || c.id === 'kitchen-sink' || c.id === 'garbage-input' || c.id === 'swing-lunge' || (c.id.startsWith('fuzz-') && Number(c.id.slice(5)) % 4 === 0))) continue;
+    if (mode === 'commandbar' && !(c.id.startsWith('preset-') || c.id.startsWith('anim-') || c.id === 'move-thrust' || c.id === 'kitchen-sink' || c.id === 'garbage-input' || c.id === 'swing-lunge' || (c.id.startsWith('fuzz-') && Number(c.id.slice(5)) % 4 === 0))) continue;
     const t0 = Date.now();
     let r;
     try {
-      r = await runOne(c.id, c.cfg, mode);
+      r = await runOne(c.id, c.cfg, mode, c.opts);
     } catch (err) {
       r = { problems: ['runner crashed: ' + (err && err.stack ? err.stack : err)], checks: 0, gen: { lines: 0, bytes: 0 } };
     }

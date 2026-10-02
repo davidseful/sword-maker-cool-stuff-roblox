@@ -484,6 +484,7 @@
         wave: defaultsFor(SF.WAVE_PARAMS),
       }),
       sounds: { swing: true, equip: true, hit: '' },
+      anim: SF.defaultAnim(),
     };
   };
 
@@ -620,6 +621,9 @@
     const ss = s.sounds || {};
     const hit = String(ss.hit == null ? '' : ss.hit).replace(/[^0-9]/g, '').slice(0, 20);
     out.sounds = { swing: ss.swing !== false, equip: ss.equip !== false, hit };
+
+    // animations (the move library lives in anims.js)
+    out.anim = SF.normAnim(s.anim, d.anim);
 
     return out;
   };

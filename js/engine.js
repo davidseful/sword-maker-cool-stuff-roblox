@@ -765,8 +765,8 @@ end`;
   E.waveStub = String.raw`	local function fireWave() end -- (this sword does not fire waves)`;
 
   /* ----------------------------------------------------------------- combat core */
-  E.combatA = String.raw`-- everything one sword needs to fight; call setupCombat(tool) once per Tool
-local function setupCombat(tool)
+  E.combatA = (A) => String.raw`-- everything one sword needs to fight; call setupCombat(tool) once per Tool
+${A ? E.animFlag + '\n\n' : ''}local function setupCombat(tool)
 	local handle = tool:WaitForChild("Handle")
 	local hitbox = tool:WaitForChild("Hitbox")
 	local baseGrip = tool.Grip
@@ -796,7 +796,7 @@ local function setupCombat(tool)
 			sound:Play()
 		end
 	end
-
+${A ? E.animServer(A) : ''}
 	-- effects that react to the sword being used (their "Trigger" attribute says when)
 	local swingFx, burstFx, equipFx, hitFx = {}, {}, {}, {}
 	for _, inst in ipairs(tool:GetDescendants()) do
@@ -896,9 +896,9 @@ local function setupCombat(tool)
 	end
 `;
 
-  E.combatB = String.raw`
+  E.combatB = (A) => String.raw`
 	-- one swing. kind is "Slash" or "Lunge"
-	local function swing(kind, finisher)
+	local function swing(kind, finisher${A && A.swings ? ', moveId' : ''})
 		activeSwings += 1
 		local damage = stat("Damage")
 		local windup, window = 0.1, 0.3
@@ -907,18 +907,49 @@ local function setupCombat(tool)
 			windup, window = 0.05, 0.4
 		end
 
-		-- Roblox's default character script plays its slash / lunge animation when it sees this value
+${A && A.swings ? `		-- with the animator, the move decides the timing: the blade is live while the sword is actually moving
+		local custom = animatorReady and moveId ~= nil
+		if custom then
+			local total = playMove(moveId)
+			local hit = ANIMATION.moves[moveId].hit
+			windup = hit[1] * total
+			window = math.max(0.15, (hit[2] - hit[1]) * total)
+		else
+			-- Roblox's default character script plays its slash / lunge animation when it sees this value
+			local animation = Instance.new("StringValue")
+			animation.Name = "toolanim"
+			animation.Value = kind
+			animation.Parent = tool
+			Debris:AddItem(animation, 1)
+		end
+` : `		-- Roblox's default character script plays its slash / lunge animation when it sees this value
 		local animation = Instance.new("StringValue")
 		animation.Name = "toolanim"
 		animation.Value = kind
 		animation.Parent = tool
 		Debris:AddItem(animation, 1)
-
+`}
 		playSound(kind == "Lunge" and "LungeSound" or "SwingSound")
 		setEnabled(swingFx, true)
 		emit(burstFx)
 
-		if kind == "Lunge" then
+${A && A.swings ? `		if kind == "Lunge" then
+			if not custom then
+				tool.Grip = baseGrip * CFrame.Angles(math.rad(90), 0, 0) -- point the blade forward
+			end
+			local dash = stat("LungeDash")
+			if dash > 0 and root then
+				task.delay(custom and windup * 0.7 or 0, function()
+					if equipped and root.Parent then
+						push(root, root.CFrame.LookVector * dash, 0.22)
+					end
+				end)
+			end
+		end
+		if WAVE_MODE == "every" or (WAVE_MODE == "finisher" and finisher) then
+			task.delay(custom and windup or 0.12, fireWave)
+		end
+` : `		if kind == "Lunge" then
 			tool.Grip = baseGrip * CFrame.Angles(math.rad(90), 0, 0) -- point the blade forward
 			local dash = stat("LungeDash")
 			if dash > 0 and root then
@@ -928,7 +959,7 @@ local function setupCombat(tool)
 		if WAVE_MODE == "every" or (WAVE_MODE == "finisher" and finisher) then
 			task.delay(0.12, fireWave)
 		end
-
+`}
 		local params = OverlapParams.new()
 		params.FilterType = Enum.RaycastFilterType.Exclude
 		params.FilterDescendantsInstances = { character }
@@ -945,7 +976,7 @@ local function setupCombat(tool)
 		if activeSwings == 0 then
 			setEnabled(swingFx, false)
 		end
-		if kind == "Lunge" then
+		if kind == "Lunge"${A && A.swings ? ' and not custom' : ''} then
 			task.wait(0.2)
 			if equipped then
 				tool.Grip = baseGrip
@@ -966,7 +997,29 @@ local function setupCombat(tool)
 		local style = stat("SwingStyle")
 		local kind = "Slash"
 		local finisher = false
+${A && A.swings ? `		local step
 		if style == "Lunge" then
+			kind = "Lunge"
+			finisher = true
+			animStep += 1
+			step = animStep
+		elseif style == "Combo" then
+			if now - lastComboTime > math.max(1.3, stat("Cooldown") + 0.8) then
+				comboStep = 0 -- you waited too long: the combo starts over
+			end
+			comboStep = comboStep % comboLength + 1
+			lastComboTime = now
+			step = comboStep
+			if comboStep == comboLength then
+				kind = "Lunge"
+				finisher = true
+			end
+		else
+			animStep += 1
+			step = animStep
+		end
+		local moveId = ANIMATION.swings[(step - 1) % #ANIMATION.swings + 1]
+` : `		if style == "Lunge" then
 			kind = "Lunge"
 			finisher = true
 		elseif style == "Combo" then
@@ -980,9 +1033,9 @@ local function setupCombat(tool)
 				finisher = true
 			end
 		end
-
+`}
 		task.spawn(function()
-			local ok, err = pcall(swing, kind, finisher)
+			local ok, err = pcall(swing, kind, finisher${A && A.swings ? ', moveId' : ''})
 			if not ok then
 				warn("[SwordForge] swing failed: " .. tostring(err))
 				activeSwings = 0
@@ -996,7 +1049,7 @@ local function setupCombat(tool)
 		session += 1
 		activeSwings = 0
 		setEnabled(swingFx, false)
-		tool.Grip = baseGrip
+		tool.Grip = baseGrip${A ? '\n\t\ttool:SetAttribute("SFIdle", "")\n\t\ttool:SetAttribute("SFPlay", "")' : ''}
 		if diedConnection then
 			diedConnection:Disconnect()
 			diedConnection = nil
@@ -1017,7 +1070,13 @@ local function setupCombat(tool)
 		tool.Grip = baseGrip
 		playSound("EquipSound")
 		emit(equipFx)
-		local token = session
+${A ? `		if animatorReady then
+			tool:SetAttribute("SFIdle", ANIMATION.idle)
+			if ANIMATION.equip ~= "" then
+				playMove(ANIMATION.equip)
+			end
+		end
+` : ''}		local token = session
 		startLoops(tool, function()
 			return equipped and session == token and tool.Parent ~= nil
 		end)
@@ -1025,6 +1084,378 @@ local function setupCombat(tool)
 	end)
 	tool.Unequipped:Connect(onUnequipped)
 	tool.Activated:Connect(onActivated)
+end`;
+
+  /* ----------------------------------------------------------------- animations */
+  // the LocalScript that moves the character (shared by every sword that uses animations)
+  E.animator = String.raw`-- SwordForgeAnimator (LocalScript) - made with Sword Forge
+-- Plays the swing, idle and equip moves of Sword Forge swords on every character you can see.
+-- It only turns the character's joints (Motor6D.C0) and the sword's grip on THIS machine, every frame,
+-- so the motion is smooth for everybody. The server just says which move started and when.
+if _G.SwordForgeAnimator then
+	return -- another copy is already running
+end
+_G.SwordForgeAnimator = true
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+
+local CHANNELS = { "ra", "wr", "la", "to", "he", "rl", "ll" } -- right arm, wrist, left arm, torso, head, right leg, left leg
+local rad = math.rad
+
+local function newPose()
+	return {
+		ra = { 0, 0, 0 }, wr = { 0, 0, 0 }, la = { 0, 0, 0 }, to = { 0, 0, 0 },
+		he = { 0, 0, 0 }, rl = { 0, 0, 0 }, ll = { 0, 0, 0 }, dy = 0, dz = 0,
+	}
+end
+
+local function copyPose(from, into)
+	for _, ch in ipairs(CHANNELS) do
+		for n = 1, 3 do
+			into[ch][n] = from[ch][n]
+		end
+	end
+	into.dy = from.dy
+	into.dz = from.dz
+end
+
+local function ease(kind, u)
+	if kind == "lin" then
+		return u
+	elseif kind == "in" then
+		return u * u
+	elseif kind == "out" then
+		return 1 - (1 - u) * (1 - u)
+	end
+	return u * u * (3 - 2 * u)
+end
+
+-- a key that does not mention a channel keeps the value it had before
+local function prepare(move)
+	if move.prepared then
+		return
+	end
+	local current = newPose()
+	for _, key in ipairs(move.keys) do
+		local pose = newPose()
+		for _, ch in ipairs(CHANNELS) do
+			local v = key[ch] or current[ch]
+			pose[ch] = { v[1], v[2], v[3] }
+		end
+		pose.dy = key.dy or current.dy
+		pose.dz = key.dz or current.dz
+		key.pose = pose
+		key.e = key.e or "io"
+		current = pose
+	end
+	move.prepared = true
+end
+
+-- the body pose of a move at u (0 = start, 1 = end)
+local function poseAt(move, u, out)
+	local keys = move.keys
+	u = math.clamp(u, 0, 1)
+	local i = 2
+	while i < #keys and u > keys[i].t do
+		i += 1
+	end
+	local a, b = keys[i - 1], keys[i]
+	local f = ease(b.e, math.clamp((u - a.t) / math.max(1e-6, b.t - a.t), 0, 1))
+	for _, ch in ipairs(CHANNELS) do
+		for n = 1, 3 do
+			out[ch][n] = a.pose[ch][n] + (b.pose[ch][n] - a.pose[ch][n]) * f
+		end
+	end
+	out.dy = a.pose.dy + (b.pose.dy - a.pose.dy) * f
+	out.dz = a.pose.dz + (b.pose.dz - a.pose.dz) * f
+end
+
+-- cross-fade; angles take the short way round so a finished spin does not unwind
+local function blendPose(a, b, w, out)
+	for _, ch in ipairs(CHANNELS) do
+		for n = 1, 3 do
+			out[ch][n] = a[ch][n] + ((b[ch][n] - a[ch][n] + 180) % 360 - 180) * w
+		end
+	end
+	out.dy = a.dy + (b.dy - a.dy) * w
+	out.dz = a.dz + (b.dz - a.dz) * w
+end
+
+-- ---------------------------------------------------------------- the rig (R6 and R15)
+local JOINTS = {
+	root = { "RootJoint", "Root" },
+	waist = { "Waist" },
+	neck = { "Neck" },
+	rsh = { "Right Shoulder", "RightShoulder" },
+	lsh = { "Left Shoulder", "LeftShoulder" },
+	rhip = { "Right Hip", "RightHip" },
+	lhip = { "Left Hip", "LeftHip" },
+}
+
+local function findRig(character)
+	local byName = {}
+	for _, d in ipairs(character:GetDescendants()) do
+		if d:IsA("Motor6D") then
+			byName[d.Name] = d
+		end
+	end
+	local rig = { joints = {}, r6 = byName["RootJoint"] ~= nil }
+	for key, names in pairs(JOINTS) do
+		for _, name in ipairs(names) do
+			local motor = byName[name]
+			if motor then
+				rig.joints[key] = { motor = motor, c0 = motor.C0 }
+				break
+			end
+		end
+	end
+	return rig
+end
+
+local function angles(v)
+	return CFrame.Angles(rad(v[1]), rad(v[2]), rad(v[3]))
+end
+
+-- turns a joint about its own pivot (in the parent part's frame) and slides it by "move"
+local function offset(joint, rotation, move)
+	if joint then
+		local pivot = joint.c0.Position
+		joint.motor.C0 = CFrame.new(pivot + move) * rotation * (joint.c0 - pivot)
+	end
+end
+
+local NONE = Vector3.new(0, 0, 0)
+local SAME = CFrame.new()
+
+local function applyPose(rig, pose)
+	local j = rig.joints
+	local torso = angles(pose.to)
+	local body = Vector3.new(0, pose.dy, pose.dz)
+	if rig.r6 then
+		-- R6 has no waist: turn the whole torso, and let the hips cancel it so the legs stay put
+		offset(j.root, torso, body)
+		local undo = torso:Inverse()
+		offset(j.rhip, undo * angles(pose.rl), NONE)
+		offset(j.lhip, undo * angles(pose.ll), NONE)
+	else
+		offset(j.root, SAME, body)
+		offset(j.waist, torso, NONE)
+		offset(j.rhip, angles(pose.rl), NONE)
+		offset(j.lhip, angles(pose.ll), NONE)
+	end
+	offset(j.rsh, angles(pose.ra), NONE)
+	offset(j.lsh, angles(pose.la), NONE)
+	offset(j.neck, angles(pose.he), NONE)
+end
+
+local function applyGrip(rig, character, pose)
+	local grip = rig.grip
+	if not grip or grip.weld.Parent == nil then
+		local weld = character:FindFirstChild("RightGrip", true)
+		grip = weld and { weld = weld, c0 = weld.C0 } or nil
+		rig.grip = grip
+	end
+	if grip then
+		grip.weld.C0 = grip.c0 * angles(pose.wr)
+	end
+end
+
+local function restore(rig)
+	for _, joint in pairs(rig.joints) do
+		joint.motor.C0 = joint.c0
+	end
+	if rig.grip and rig.grip.weld.Parent then
+		rig.grip.weld.C0 = rig.grip.c0
+	end
+	rig.grip = nil
+end
+
+-- ---------------------------------------------------------------- one character
+local states = setmetatable({}, { __mode = "k" })
+local zero = newPose()
+local scratch = newPose()
+
+local function stateOf(character)
+	local s = states[character]
+	if not s then
+		s = {
+			rig = findRig(character), pose = newPose(), from = newPose(),
+			blendTime = 1, blendLength = 0.1, playKey = "", move = nil, movesKey = "", moves = {},
+			start = 0, speed = 1, active = false,
+		}
+		states[character] = s
+	end
+	return s
+end
+
+local function startBlend(s, length)
+	copyPose(s.pose, s.from)
+	s.blendTime = 0
+	s.blendLength = length
+end
+
+local function update(character, tool, dt)
+	local s = stateOf(character)
+	if not tool then
+		if s.active then
+			restore(s.rig)
+			s.active = false
+			s.move = nil
+			s.playKey = ""
+			copyPose(zero, s.pose)
+		end
+		return
+	end
+
+	local raw = tool:GetAttribute("SFMoves")
+	if raw ~= s.movesKey then
+		s.movesKey = raw
+		local ok, decoded = pcall(HttpService.JSONDecode, HttpService, raw)
+		s.moves = ok and decoded or {}
+		for _, move in pairs(s.moves) do
+			prepare(move)
+		end
+	end
+
+	local play = tool:GetAttribute("SFPlay") or ""
+	if play ~= s.playKey then
+		s.playKey = play
+		local id, start, speed = string.match(play, "^([^|]*)|([^|]*)|([^|]*)")
+		local move = id and s.moves[id]
+		if move then
+			startBlend(s, move.hit and 0.08 or 0.12)
+			s.move, s.start, s.speed = move, tonumber(start) or 0, tonumber(speed) or 1
+		else
+			s.move = nil
+		end
+	end
+
+	local target = scratch
+	local found = false
+	if s.move then
+		local u = (workspace:GetServerTimeNow() - s.start) * s.speed / s.move.dur
+		if u >= 1 then
+			s.move = nil
+			startBlend(s, 0.18)
+		else
+			poseAt(s.move, u, target)
+			found = true
+		end
+	end
+	if not found then
+		local idle = s.moves[tool:GetAttribute("SFIdle") or ""]
+		if idle then
+			poseAt(idle, (os.clock() / idle.dur) % 1, target)
+		else
+			copyPose(zero, target)
+		end
+	end
+
+	if s.blendTime < s.blendLength then
+		s.blendTime += dt
+		local w = math.min(1, s.blendTime / s.blendLength)
+		blendPose(s.from, target, w * w * (3 - 2 * w), s.pose)
+	else
+		copyPose(target, s.pose)
+	end
+
+	s.active = true
+	applyPose(s.rig, s.pose)
+	applyGrip(s.rig, character, s.pose)
+end
+
+local warned = false
+RunService.RenderStepped:Connect(function(dt)
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		if character then
+			local tool = character:FindFirstChildOfClass("Tool")
+			if tool and tool:GetAttribute("SFMoves") == nil then
+				tool = nil -- a sword that does not use animations
+			end
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			if humanoid and humanoid.Health <= 0 then
+				tool = nil
+			end
+			local ok, err = pcall(update, character, tool, dt)
+			if not ok and not warned then
+				warned = true
+				warn("[SwordForgeAnimator] " .. tostring(err))
+			end
+		end
+	end
+end)
+`;
+
+  // set by the delivery code once the animator LocalScript is known to exist
+  E.animFlag = String.raw`-- animations: the server only says which move starts and when; the SwordForgeAnimator LocalScript
+-- (see the bottom of this script) turns the joints on every screen. No animator = Roblox's normal swing.
+local animatorReady = false`;
+
+  // inside setupCombat
+  E.animServer = (A) => String.raw`
+
+	-- ---- animations ---------------------------------------------------------------------
+	local moveCounter = 0
+${A.swings ? `	local animStep = 0
+	local comboLength = math.max(#ANIMATION.swings, 3)
+` : ''}	pcall(function()
+		tool:SetAttribute("SFMoves", game:GetService("HttpService"):JSONEncode(ANIMATION.moves))
+	end)
+
+	-- starts a move on every screen and returns how long it lasts (seconds)
+	local function playMove(id)
+		local data = ANIMATION.moves[id]
+		if not data then
+			return 0
+		end
+		moveCounter += 1
+		tool:SetAttribute("SFPlay", string.format("%s|%.3f|%.3f|%d", id, workspace:GetServerTimeNow(), ANIMATION.speed, moveCounter))
+		return data.dur / ANIMATION.speed
+	end
+`;
+
+  // command bar mode: the animator goes to StarterPlayerScripts so every player runs it
+  E.installAnimator = String.raw`-- the animator plays the moves on every screen
+local starterScripts = game:GetService("StarterPlayer"):FindFirstChild("StarterPlayerScripts")
+if starterScripts then
+	local oldAnimator = starterScripts:FindFirstChild("SwordForgeAnimator")
+	if oldAnimator then
+		oldAnimator:Destroy()
+	end
+	local animator = Instance.new("LocalScript")
+	animator.Name = "SwordForgeAnimator"
+	animator.Source = ANIMATOR_SOURCE
+	animator.Parent = starterScripts
+else
+	warn("[SwordForge] Could not find StarterPlayerScripts, so the animations will not play.")
+end`;
+
+  // script mode: every player gets a copy of the LocalScript that sits inside this Script
+  E.animatorInstall = String.raw`-- the animator: a LocalScript named SwordForgeAnimator inside THIS Script. Every player gets a copy.
+local animatorTemplate = script and script:FindFirstChild("SwordForgeAnimator")
+if animatorTemplate and animatorTemplate:IsA("LocalScript") then
+	animatorReady = true
+	local function giveAnimator(player)
+		local gui = player:WaitForChild("PlayerGui", 30)
+		if gui and not gui:FindFirstChild("SwordForgeAnimator") then
+			local copy = animatorTemplate:Clone()
+			pcall(function()
+				copy.Disabled = false
+			end)
+			copy.Parent = gui
+		end
+	end
+	Players.PlayerAdded:Connect(function(player)
+		task.spawn(giveAnimator, player)
+	end)
+	for _, player in ipairs(Players:GetPlayers()) do
+		task.spawn(giveAnimator, player)
+	end
+else
+	warn("[SwordForge] This sword has animations, but there is no LocalScript named SwordForgeAnimator inside this Script yet. Until you add it, the sword uses Roblox's normal swing. (Easiest: use the 'Studio file' download, it already has it.)")
 end`;
 
   /* ----------------------------------------------------------------- delivery (runtime mode) */

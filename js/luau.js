@@ -60,7 +60,7 @@
     if (!keys.length) return '{}';
     const inline = '{ ' + keys.map((k) => luaKey(k) + ' = ' + ser(v[k], level + 1, 'inline')).join(', ') + ' }';
     if (mode === 'inline' || (mode === 'auto' && inline.length <= 96)) return inline;
-    return '{\n' + keys.map((k) => pad + luaKey(k) + ' = ' + ser(v[k], level + 1, k === 'Parts' ? 'rows' : 'auto') + ',').join('\n') + '\n' + padEnd + '}';
+    return '{\n' + keys.map((k) => pad + luaKey(k) + ' = ' + ser(v[k], level + 1, k === 'Parts' || k === 'keys' ? 'rows' : 'auto') + ',').join('\n') + '\n' + padEnd + '}';
   }
   SF.luaSerialize = (v, level, mode) => ser(v, level || 0, mode);
   SF.luaStr = luaStr;
@@ -137,7 +137,8 @@
     // does anything need the animated-effects loop?
     const needsLoops = hasRainbow || fx.some((e) => (e.kind === 'glow' && e.pulse > 0) || e.kind === 'arcs') || parts.some((p) => p.ap);
 
-    return { config, stats, enchants, wave, waveMode: w.mode, needsLoops, effects };
+    const anim = SF.animData(cfg.anim);
+    return { config, stats, enchants, wave, waveMode: w.mode, needsLoops, effects, anim };
   }
 
   /* ----------------------------------------------------------- code blocks */
@@ -150,7 +151,13 @@
     if (keys.length) out.push('local ENCHANT_CFG = ' + ser(d.enchants, 0) + '\n');
     out.push('local WAVE_MODE = ' + luaStr(d.waveMode));
     if (d.wave) out.push('local WAVE = ' + ser(d.wave, 0));
+    if (d.anim) out.push('\nlocal ANIMATION = ' + ser(animTable(d.anim), 0));
     return out.join('\n');
+  }
+
+  /* the moves, in the order they read best in the script */
+  function animTable(a) {
+    return { speed: a.speed, swings: a.swings, idle: a.idle, equip: a.equip, moves: a.moves };
   }
 
   function combatCode(d) {
@@ -167,7 +174,8 @@
       if (names.includes(id)) blocks.push(e.enchants[id]);
     });
     blocks.push(d.needsLoops ? e.loops : e.loopsStub);
-    blocks.push(e.combatA + (d.wave ? e.wave : e.waveStub) + '\n' + e.combatB);
+    const A = d.anim ? { swings: d.anim.swings.length > 0 } : null;
+    blocks.push(e.combatA(A) + (d.wave ? e.wave : e.waveStub) + '\n' + e.combatB(A));
     return blocks.join('\n\n');
   }
 
@@ -205,6 +213,12 @@
     return blocks.join('\n\n');
   }
 
+  function banner_anim() {
+    return '-- Animations. Each move is a few keyframes: at time t (0..1 of the move) these body parts are turned by this many degrees.\n'
+      + '-- ra right arm, wr wrist, la left arm, to torso, he head, rl / ll legs, dy / dz body height / forward (studs).\n'
+      + '-- swings = the combo in order, idle = the stance, equip = the flourish. "" means none. speed 1 = normal.';
+  }
+
   function banner(title, sub) {
     const line = '-- ' + '='.repeat(76);
     return line + '\n--  ' + title + (sub ? '\n--  ' + sub : '') + '\n' + line;
@@ -240,7 +254,12 @@
         '--',
         '-- Want to tweak it? Change the numbers in STATS (damage, cooldown ...),',
         '-- ENCHANT_CFG and CONFIG below, then press Play again.',
-      ].join('\n'));
+      ].concat(d.anim ? [
+        '--',
+        '-- ANIMATIONS: this sword moves your character (swings, stance, flourish). That needs one more piece:',
+        '--   inside this Script, add a LocalScript named  SwordForgeAnimator  and paste the animator code into it.',
+        '--   (Skip it and the sword still works with Roblox\'s normal swing. The "Studio file" download has it built in.)',
+      ] : []).join('\n'));
     } else {
       out.push([
         '-- ' + name + '  -  made with Sword Forge  (Command Bar builder)',
@@ -251,7 +270,9 @@
         '--   3. The sword is built into StarterPack (look in the Explorer).',
         '--      Press Play and it is in your hotbar. You can now edit its parts,',
         '--      change Attributes (damage ...) or save it to your Toolbox.',
-      ].join('\n'));
+      ].concat(d.anim ? [
+        '--   It also adds a LocalScript called SwordForgeAnimator to StarterPlayerScripts: that is what plays the animations.',
+      ] : []).join('\n'));
     }
 
     out.push('\n' + banner('1. YOUR SWORD', 'Numbers you can tweak.') + '\n');
@@ -261,6 +282,7 @@
       if (Object.keys(d.enchants).length) out.push('local ENCHANT_CFG = ' + ser(d.enchants, 0) + '\n');
       out.push('local WAVE_MODE = ' + luaStr(d.waveMode));
       if (d.wave) out.push('local WAVE = ' + ser(d.wave, 0));
+      if (d.anim) out.push('\n' + banner_anim() + '\nlocal ANIMATION = ' + ser(animTable(d.anim), 0));
       out.push('');
     }
     out.push('local CONFIG = ' + ser(d.config, 0));
@@ -278,6 +300,7 @@
       out.push('\n' + banner('4. COMBAT', 'Swings, damage and special powers.') + '\n');
       out.push(combat);
       out.push('\n' + banner('5. GIVE THE SWORD TO PLAYERS') + '\n');
+      if (d.anim) out.push(e.animatorInstall + '\n');
       out.push(e.delivery);
     } else {
       // the combat code becomes the Script that lives inside the Tool
@@ -289,7 +312,7 @@
         '',
         pruneHelpers(e.helpers, combat),
         '',
-        combat,
+        d.anim ? combat.replace('local animatorReady = false', 'local animatorReady = true -- the builder also puts SwordForgeAnimator into StarterPlayerScripts') : combat,
         '',
         'setupCombat(script.Parent)',
         '',
@@ -297,13 +320,18 @@
       const eq = pickDelimiter(chunk);
       out.push('\n' + banner('4. THE SCRIPT THAT GOES INSIDE THE TOOL') + '\n');
       out.push('local COMBAT_SOURCE = [' + eq + '[\n' + chunk + ']' + eq + ']');
+      if (d.anim) {
+        const aeq = pickDelimiter(e.animator);
+        out.push('\n' + banner('4b. THE ANIMATOR (a LocalScript that turns the joints)') + '\n');
+        out.push('local ANIMATOR_SOURCE = [' + aeq + '[\n' + e.animator + ']' + aeq + ']');
+      }
       out.push('\n' + banner('5. BUILD IT') + '\n');
-      out.push(e.install);
+      out.push(e.install + (d.anim ? '\n' + e.installAnimator : ''));
     }
 
     const code = out.join('\n').replace(/\n{3,}/g, '\n\n') + '\n';
     return {
-      code, mode, model,
+      code, mode, model, animator: d.anim ? e.animator : null,
       lines: code.split('\n').length - 1,
       bytes: code.length,
     };
@@ -317,6 +345,13 @@
     const names = SF.ENCHANT_IDS.filter((id) => cfg.combat.enchants[id].on).map((id) => SF.ENCHANTS[id].label);
     if (names.length) bits.push(names.join(', '));
     if (cfg.combat.wave.mode !== 'off') bits.push('Sword wave');
-    return { parts: m.stats.parts, length: m.stats.length, effects: m.effects.length, powers: bits };
+    // animations: the names of what plays (empty when the sword just uses Roblox's own swing)
+    const an = cfg.anim, moves = [];
+    if (an.on) {
+      if (an.swings.length) moves.push(an.swings.length + (an.swings.length === 1 ? ' swing' : ' swings'));
+      if (an.idle !== 'none') moves.push(SF.MOVES[an.idle].label.toLowerCase());
+      if (an.equip !== 'none') moves.push(SF.MOVES[an.equip].label.toLowerCase());
+    }
+    return { parts: m.stats.parts, length: m.stats.length, effects: m.effects.length, powers: bits, animations: moves };
   };
 })((globalThis.SF = globalThis.SF || {}));

@@ -929,6 +929,18 @@ def("Folder", "Instance", {})
 def("Backpack", "Instance", {})
 def("Team", "Instance", {})
 def("Script", "Instance", { props = { Source = P("string", ""), Disabled = P("boolean", false) } })
+def("LocalScript", "Instance", { props = { Source = P("string", ""), Disabled = P("boolean", false) } })
+def("PlayerGui", "Instance", { noCreate = true })
+def("StarterPlayerScripts", "Instance", { noCreate = true })
+def("Motor6D", "Instance", {
+	props = {
+		Part0 = P("Instance?", nil),
+		Part1 = P("Instance?", nil),
+		C0 = P("CFrame", newCF(newV3(0, 0, 0), IDENT)),
+		C1 = P("CFrame", newCF(newV3(0, 0, 0), IDENT)),
+		Transform = P("CFrame", newCF(newV3(0, 0, 0), IDENT)),
+	},
+})
 def("StringValue", "Instance", { props = { Value = P("string", "") } })
 def("ObjectValue", "Instance", { props = { Value = P("Instance?", nil) } })
 def("Tool", "Instance", {
@@ -1153,6 +1165,9 @@ def("Workspace", "Model", {
 	service = true,
 	noCreate = true,
 	methods = {
+		GetServerTimeNow = function()
+			return Mock.now
+		end,
 		GetPartBoundsInBox = function(self, cframe, size, params)
 			assert(typeOf(cframe) == "CFrame" and typeOf(size) == "Vector3", "GetPartBoundsInBox: (CFrame, Vector3) expected")
 			assert(params == nil or typeOf(params) == "OverlapParams", "GetPartBoundsInBox: OverlapParams expected")
@@ -1222,7 +1237,152 @@ def("Debris", "Instance", {
 		end,
 	},
 })
-def("RunService", "Instance", { service = true, noCreate = true, events = { "Heartbeat", "Stepped" } })
+def("RunService", "Instance", { service = true, noCreate = true, events = { "Heartbeat", "Stepped", "RenderStepped" } })
+def("StarterPlayer", "Instance", { service = true, noCreate = true })
+
+-- JSON, the way HttpService does it (arrays become [...], everything else {...})
+local function jsonEncode(v)
+	local t = type(v)
+	if t == "number" then
+		assert(v == v and v ~= math.huge and v ~= -math.huge, "JSONEncode: cannot encode " .. tostring(v))
+		return string.format("%.14g", v)
+	elseif t == "boolean" then
+		return tostring(v)
+	elseif t == "string" then
+		return '"' .. v:gsub('[%c"\\]', function(c)
+			return string.format("\\u%04x", string.byte(c))
+		end) .. '"'
+	elseif t == "table" then
+		local n = 0
+		for _ in pairs(v) do
+			n += 1
+		end
+		if n == #v then
+			local out = {}
+			for i, x in ipairs(v) do
+				out[i] = jsonEncode(x)
+			end
+			return "[" .. table.concat(out, ",") .. "]"
+		end
+		local out = {}
+		for k, x in pairs(v) do
+			assert(type(k) == "string", "JSONEncode: object keys must be strings")
+			table.insert(out, jsonEncode(k) .. ":" .. jsonEncode(x))
+		end
+		return "{" .. table.concat(out, ",") .. "}"
+	end
+	error("JSONEncode: cannot encode a " .. t)
+end
+local function jsonDecode(text)
+	local pos = 1
+	local function skip()
+		pos = text:find("%S", pos) or #text + 1
+	end
+	local value
+	local function str()
+		local out = {}
+		pos += 1
+		while true do
+			local c = text:sub(pos, pos)
+			if c == "" then
+				error("JSONDecode: unterminated string")
+			elseif c == '"' then
+				pos += 1
+				return table.concat(out)
+			elseif c == "\\" then
+				local n = text:sub(pos + 1, pos + 1)
+				if n == "u" then
+					table.insert(out, utf8.char(tonumber(text:sub(pos + 2, pos + 5), 16)))
+					pos += 6
+				else
+					table.insert(out, ({ n = "\n", t = "\t", r = "\r" })[n] or n)
+					pos += 2
+				end
+			else
+				table.insert(out, c)
+				pos += 1
+			end
+		end
+	end
+	function value()
+		skip()
+		local c = text:sub(pos, pos)
+		if c == "{" then
+			local obj = {}
+			pos += 1
+			skip()
+			if text:sub(pos, pos) == "}" then
+				pos += 1
+				return obj
+			end
+			while true do
+				skip()
+				local k = str()
+				skip()
+				assert(text:sub(pos, pos) == ":", "JSONDecode: ':' expected at " .. pos)
+				pos += 1
+				obj[k] = value()
+				skip()
+				local d = text:sub(pos, pos)
+				pos += 1
+				if d == "}" then
+					return obj
+				end
+				assert(d == ",", "JSONDecode: ',' expected at " .. pos)
+			end
+		elseif c == "[" then
+			local arr = {}
+			pos += 1
+			skip()
+			if text:sub(pos, pos) == "]" then
+				pos += 1
+				return arr
+			end
+			while true do
+				table.insert(arr, value())
+				skip()
+				local d = text:sub(pos, pos)
+				pos += 1
+				if d == "]" then
+					return arr
+				end
+				assert(d == ",", "JSONDecode: ',' expected at " .. pos)
+			end
+		elseif c == '"' then
+			return str()
+		elseif text:sub(pos, pos + 3) == "true" then
+			pos += 4
+			return true
+		elseif text:sub(pos, pos + 4) == "false" then
+			pos += 5
+			return false
+		elseif text:sub(pos, pos + 3) == "null" then
+			pos += 4
+			return nil
+		end
+		local num = text:match("^-?%d+%.?%d*[eE]?[+-]?%d*", pos)
+		assert(num and num ~= "", "JSONDecode: unexpected character at " .. pos)
+		pos += #num
+		return tonumber(num)
+	end
+	local result = value()
+	skip()
+	assert(pos > #text, "JSONDecode: trailing characters")
+	return result
+end
+def("HttpService", "Instance", {
+	service = true,
+	noCreate = true,
+	methods = {
+		JSONEncode = function(_, v)
+			return jsonEncode(v)
+		end,
+		JSONDecode = function(_, text)
+			assert(type(text) == "string", "JSONDecode: string expected")
+			return jsonDecode(text)
+		end,
+	},
+})
 def("StarterPack", "Instance", { service = true, noCreate = true })
 def("Selection", "Instance", {
 	service = true,
@@ -1268,6 +1428,7 @@ function Mock.step(dt)
 	dt = dt or (1 / 60)
 	Mock.frame += 1
 	Mock.now += dt
+	game:GetService("RunService").RenderStepped:Fire(dt)
 	game:GetService("RunService").Heartbeat:Fire(dt)
 	while true do
 		local bestIndex, best
@@ -1327,6 +1488,7 @@ function Mock.makePlayer(name)
 	player.Name = name
 	local backpack = Instance.new("Backpack")
 	backpack.Parent = player
+	setParent(createInstance("PlayerGui", true), player)
 	player.Parent = game:GetService("Players")
 	game:GetService("Players").PlayerAdded:Fire(player)
 	return player, backpack
@@ -1338,6 +1500,75 @@ function Mock.spawnCharacter(player, position)
 	player.Character = model
 	player.CharacterAdded:Fire(model)
 	return model, humanoid, root
+end
+
+
+-- StarterPlayer/StarterPlayerScripts exist from the start in Studio
+function Mock.setupStarter()
+	local starter = game:GetService("StarterPlayer")
+	if not starter:FindFirstChild("StarterPlayerScripts") then
+		setParent(createInstance("StarterPlayerScripts", true), starter)
+	end
+end
+
+-- gives a character real Motor6D joints, with the C0 values Roblox uses. kind: "R6" or "R15"
+function Mock.makeRig(character, kind)
+	local function part(name)
+		local p = character:FindFirstChild(name)
+		if not p then
+			p = Instance.new("Part")
+			p.Name = name
+			p.Parent = character
+		end
+		return p
+	end
+	local function motor(name, parent, part0, part1, c0, c1)
+		local m = Instance.new("Motor6D")
+		m.Name = name
+		m.Part0, m.Part1, m.C0, m.C1 = part0, part1, c0, c1 or c0
+		m.Parent = parent
+		return m
+	end
+	local CF = CFrame.new
+	local root = part("HumanoidRootPart")
+	local joints = {}
+	if kind == "R6" then
+		local torso, head = part("Torso"), part("Head")
+		local ra, la, rl, ll = part("Right Arm"), part("Left Arm"), part("Right Leg"), part("Left Leg")
+		joints.root = motor("RootJoint", root, root, torso, CF(0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0))
+		joints.neck = motor("Neck", torso, torso, head, CF(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0), CF(0, -0.5, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0))
+		joints.rsh = motor("Right Shoulder", torso, torso, ra, CF(1, 0.5, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0), CF(-0.5, 0.5, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0))
+		joints.lsh = motor("Left Shoulder", torso, torso, la, CF(-1, 0.5, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0), CF(0.5, 0.5, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0))
+		joints.rhip = motor("Right Hip", torso, torso, rl, CF(1, -1, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0), CF(0.5, 1, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0))
+		joints.lhip = motor("Left Hip", torso, torso, ll, CF(-1, -1, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0), CF(-0.5, 1, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0))
+		local grip = Instance.new("Weld")
+		grip.Name = "RightGrip"
+		grip.Part0 = ra
+		grip.C0 = CF(0, -1, 0, 1, 0, 0, 0, 0, 1, 0, -1, 0)
+		grip.C1 = CFrame.new()
+		grip.Parent = ra
+		joints.grip = grip
+	else
+		local lower, upper, head = part("LowerTorso"), part("UpperTorso"), part("Head")
+		local ra, la = part("RightUpperArm"), part("LeftUpperArm")
+		local rl, ll = part("RightUpperLeg"), part("LeftUpperLeg")
+		local hand = part("RightHand")
+		joints.root = motor("Root", lower, root, lower, CF(0, -0.1, 0))
+		joints.waist = motor("Waist", upper, lower, upper, CF(0, 0.2, 0), CF(0, -0.2, 0))
+		joints.neck = motor("Neck", head, upper, head, CF(0, 0.8, 0), CF(0, -0.5, 0))
+		joints.rsh = motor("RightShoulder", ra, upper, ra, CF(1, 0.58, 0), CF(-0.2, 0.4, 0))
+		joints.lsh = motor("LeftShoulder", la, upper, la, CF(-1, 0.58, 0), CF(0.2, 0.4, 0))
+		joints.rhip = motor("RightHip", rl, lower, rl, CF(0.5, -0.2, 0), CF(0, 0.5, 0))
+		joints.lhip = motor("LeftHip", ll, lower, ll, CF(-0.5, -0.2, 0), CF(0, 0.5, 0))
+		local grip = Instance.new("Weld")
+		grip.Name = "RightGrip"
+		grip.Part0 = hand
+		grip.C0 = CF(0, -0.1, 0) * CFrame.Angles(-math.pi / 2, 0, 0)
+		grip.C1 = CFrame.new()
+		grip.Parent = hand
+		joints.grip = grip
+	end
+	return joints
 end
 
 return Mock

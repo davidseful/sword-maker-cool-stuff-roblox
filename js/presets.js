@@ -281,6 +281,28 @@
     },
   ];
 
+  /* the moves that suit each sword: [idle stance, equip flourish, speed, ...swings] */
+  const MOVES = {
+    classic: ['ready', 'draw', 1, 'diag', 'slash_b', 'chop'],
+    flame: ['flow', 'twirl', 1, 'slash_h', 'rising', 'smash'],
+    frost: ['guard', 'salute', 1.05, 'slash_h', 'cross', 'thrust'],
+    saber: ['two_hand', 'twirl', 1.25, 'diag', 'slash_b', 'spin'],
+    crimsonsaber: ['ready', 'twirl', 1.2, 'slash_h', 'rising', 'cross'],
+    shadow: ['low', 'draw', 1.1, 'iaido', 'slash_b', 'cross'],
+    excalibur: ['guard', 'salute', 0.95, 'chop', 'diag', 'smash'],
+    thunder: ['flow', 'stomp', 1.15, 'diag', 'slash_h', 'spin'],
+    venom: ['ready', 'draw', 1.2, 'jab', 'slash_b', 'thrust'],
+    crimson: ['rest', 'stomp', 1, 'rising', 'slash_h', 'whirl'],
+    rainbow: ['flow', 'twirl', 1.1, 'flurry', 'spin', 'cross'],
+    titan: ['two_hand', 'stomp', 0.85, 'chop', 'slash_h', 'smash'],
+    void: ['low', 'stomp', 1, 'slash_b', 'whirl', 'thrust'],
+    dagger: ['ready', 'draw', 1.5, 'jab', 'flurry', 'jab'],
+  };
+  presets.forEach((p) => {
+    const m = MOVES[p.id];
+    if (m) p.cfg.anim = { on: true, idle: m[0], equip: m[1], speed: m[2], swings: m.slice(3) };
+  });
+
   SF.PRESETS = presets.map((p) => Object.assign({}, p, { cfg: SF.normalize(p.cfg) }));
   SF.presetById = (id) => SF.PRESETS.find((p) => p.id === id);
 })((globalThis.SF = globalThis.SF || {}));

@@ -32,6 +32,14 @@ local player, backpack = Mock.makePlayer("Tester")
 local character, humanoid, root = Mock.spawnCharacter(player, Vector3.new(0, 3, 0))
 humanoid.MaxHealth = 1000000
 humanoid.Health = 1000000
+local ANIM = EXPECT.anim
+local rig6 = ANIM and Mock.makeRig(character, "R6") or nil
+local orig6 = {}
+if rig6 then
+	for key, joint in pairs(rig6) do
+		orig6[key] = joint.C0
+	end
+end
 Mock.run(0.6)
 
 ------------------------------------------------------------------ get the tool
@@ -62,6 +70,28 @@ else
 	end
 end
 
+------------------------------------------------------------------ animations: the server side + starting the animator
+local animatorScript
+if ANIM then
+	local found
+	if EXPECT.mode == "commandbar" then
+		found = game:GetService("StarterPlayer").StarterPlayerScripts:FindFirstChild("SwordForgeAnimator")
+		check(found ~= nil and found:IsA("LocalScript"), "the builder put SwordForgeAnimator into StarterPlayerScripts")
+	elseif not EXPECT.animatorMissing then
+		local gui = player:FindFirstChild("PlayerGui")
+		found = gui and gui:FindFirstChild("SwordForgeAnimator")
+		check(found ~= nil and found:IsA("LocalScript"), "the player got a copy of the animator in PlayerGui")
+	end
+	if found then
+		check(#found.Source > 2000, "the animator has its source")
+		animatorScript = found
+		-- what Roblox does for a LocalScript in PlayerGui / StarterPlayerScripts: it starts running
+		__runSource(found.Source, found)
+		Mock.run(0.1)
+		check(_G.SwordForgeAnimator == true, "the animator started")
+	end
+end
+
 ------------------------------------------------------------------ structure
 local handle = tool:FindFirstChild("Handle")
 local hitbox = tool:FindFirstChild("Hitbox")
@@ -83,6 +113,16 @@ check(partCount == EXPECT.partCount, "part count " .. partCount .. " == " .. EXP
 check(weldCount == EXPECT.partCount + 1, "one weld per part plus the hitbox")
 check(tool:GetAttribute("Damage") == EXPECT.damage, "Damage attribute is set")
 check(tool:GetAttribute("SwingStyle") == EXPECT.swing, "SwingStyle attribute is set")
+if ANIM then
+	local raw = tool:GetAttribute("SFMoves")
+	check(type(raw) == "string", "SFMoves (the moves, as JSON) is set on the tool")
+	local moves = type(raw) == "string" and game:GetService("HttpService"):JSONDecode(raw) or {}
+	for id, info in pairs(ANIM.moves) do
+		check(moves[id] ~= nil and math.abs(moves[id].dur - info.dur) < 1e-6 and #moves[id].keys == info.keys, "move " .. id .. " survived the JSON round trip")
+	end
+else
+	check((tool:GetAttribute("SFMoves") ~= nil) == EXPECT.hasAnim, "SFMoves is set exactly when the sword has animations")
+end
 
 local trails = descendantsOfClass(tool, "Trail")
 local swingTrails, alwaysTrails = 0, 0
@@ -127,6 +167,15 @@ end
 tool.Parent = character
 Mock.run(0.3)
 check(tool.Parent == character, "tool is equipped")
+if ANIM and animatorScript then
+	check(tool:GetAttribute("SFIdle") == ANIM.idle, "SFIdle is the idle stance (" .. tostring(tool:GetAttribute("SFIdle")) .. ")")
+	local play = tool:GetAttribute("SFPlay") or ""
+	if ANIM.equip ~= "" then
+		check(string.match(play, "^" .. ANIM.equip .. "|") ~= nil, "the equip flourish started (" .. play .. ")")
+	else
+		check(play == "", "no equip flourish")
+	end
+end
 local equipAfter = 0
 for _, e in ipairs(emitters) do
 	if e:GetAttribute("Trigger") == "equip" then
@@ -151,8 +200,8 @@ local function hurt()
 end
 
 tool:Activate()
-Mock.run(0.2)
--- the hit lands ~0.1s after the click; its effects are still alive now
+Mock.run(EXPECT.hitWait)
+-- the hit lands ~0.1s after the click (or when the move reaches its hit window); its effects are still alive now
 for _, t in ipairs(trails) do
 	if t:GetAttribute("Trigger") == "swing" then
 		check(t.Enabled == true, "swing trail is enabled during the swing")
@@ -164,7 +213,13 @@ for _, e in ipairs(emitters) do
 	end
 end
 local anim = tool:FindFirstChild("toolanim")
-check(anim ~= nil and anim.Value == (EXPECT.swing == "Lunge" and "Lunge" or "Slash"), "toolanim value for the first swing")
+if EXPECT.customSwings then
+	check(anim == nil, "an animated swing does not use the default toolanim")
+	local play = tool:GetAttribute("SFPlay") or ""
+	check(string.match(play, "^" .. ANIM.swings[1] .. "|") ~= nil, "the first swing plays " .. ANIM.swings[1] .. " (" .. play .. ")")
+else
+	check(anim ~= nil and anim.Value == (EXPECT.swing == "Lunge" and "Lunge" or "Slash"), "toolanim value for the first swing")
+end
 
 local firstDamage = EXPECT.firstDamage
 check(hurt() >= firstDamage - 0.001, "first swing damaged the dummy by at least " .. firstDamage .. " (was " .. hurt() .. ")")
@@ -233,7 +288,7 @@ if EXPECT.swingSound then
 	check(sound ~= nil and Mock.state(sound).played == 1, "swing sound played once")
 end
 
-Mock.run(0.6) -- the swing is over
+Mock.run(EXPECT.swingTail) -- the swing is over
 local dmgAfterSwing = hurt()
 check(dmgAfterSwing < firstDamage + EXPECT.maxExtra, "no double hits in one swing (" .. dmgAfterSwing .. ")")
 check(humanoid.Health >= 500000 and (EXPECT.lifesteal or humanoid.Health == 500000), "the wielder is not hurt by their own sword")
@@ -269,18 +324,35 @@ end
 local baseLook = tool.Grip.LookVector
 local gap = math.max(EXPECT.cooldown, 0.1) + 0.7
 dummyHum.Health = 1000000
+local playsSeen = {}
+local function notePlay()
+	local play = tool:GetAttribute("SFPlay") or ""
+	table.insert(playsSeen, (string.match(play, "^([^|]*)|") or ""))
+end
 tool:Activate() -- swing 1 of a fresh combo (more than the reset time has passed)
+Mock.run(0.05)
+notePlay()
 Mock.run(gap)
 if EXPECT.swing == "Combo" then
-	tool:Activate() -- swing 2
-	Mock.run(gap)
+	for step = 2, EXPECT.comboLength - 1 do
+		tool:Activate()
+		Mock.run(0.05)
+		notePlay()
+		Mock.run(gap)
+	end
 	local before = hurt()
-	tool:Activate() -- swing 3: the finisher (lunge)
-	Mock.run(0.25)
-	check(math.abs(tool.Grip.LookVector.Y - math.cos(math.rad(EXPECT.tilt))) < 1e-4, "finisher points the blade forward (lunge pose)")
-	local anim3 = tool:FindFirstChild("toolanim")
-	check(anim3 ~= nil and anim3.Value == "Lunge", "toolanim is Lunge on the 3rd swing")
-	Mock.run(1.5)
+	tool:Activate() -- the last hit of the combo: the finisher (lunge)
+	Mock.run(0.05)
+	notePlay()
+	Mock.run(EXPECT.finisherWait)
+	if EXPECT.customSwings then
+		check((tool.Grip.LookVector - baseLook).Magnitude < 1e-6, "an animated finisher leaves the grip alone (the move turns the wrist)")
+	else
+		check(math.abs(tool.Grip.LookVector.Y - math.cos(math.rad(EXPECT.tilt))) < 1e-4, "finisher points the blade forward (lunge pose)")
+		local anim3 = tool:FindFirstChild("toolanim")
+		check(anim3 ~= nil and anim3.Value == "Lunge", "toolanim is Lunge on the 3rd swing")
+	end
+	Mock.run(EXPECT.swingTail + 1.5)
 	check((tool.Grip.LookVector - baseLook).Magnitude < 1e-6, "grip is restored after the lunge")
 	check(hurt() - before >= EXPECT.damage * EXPECT.finisher - 0.001, "finisher hits harder")
 elseif EXPECT.swing == "Lunge" then
@@ -288,6 +360,15 @@ elseif EXPECT.swing == "Lunge" then
 else
 	Mock.run(0.5)
 	check((tool.Grip.LookVector - baseLook).Magnitude < 1e-6, "slash style never changes the grip")
+end
+if EXPECT.customSwings and EXPECT.swing == "Combo" then
+	local ok = #playsSeen == EXPECT.comboLength
+	for i, id in ipairs(playsSeen) do
+		if id ~= ANIM.swings[(i - 1) % #ANIM.swings + 1] then
+			ok = false
+		end
+	end
+	check(ok, "the combo plays the moves in order (" .. table.concat(playsSeen, ",") .. ")")
 end
 
 ------------------------------------------------------------------ sword wave
@@ -311,9 +392,10 @@ if EXPECT.wave ~= "off" then
 	end
 	local fired = false
 	local wave
-	for i = 1, 3 do
+	for i = 1, EXPECT.comboLength do
 		tool:Activate()
-		for _ = 1, 36 do -- watch every frame: a fast wave can be gone within a tenth of a second
+		local frames = (EXPECT.wave == "finisher" and i < EXPECT.comboLength and EXPECT.swing == "Combo") and 24 or EXPECT.waveWatch
+		for _ = 1, frames do -- watch every frame: a fast wave can be gone within a tenth of a second
 			Mock.step()
 			if not wave and waveCount() > 0 then
 				fired = true
@@ -323,7 +405,7 @@ if EXPECT.wave ~= "off" then
 					end
 				end
 				if EXPECT.wave == "finisher" then
-					check(i == 3 or EXPECT.swing == "Lunge", "the wave only comes with the finisher (swing " .. i .. ")")
+					check(i == EXPECT.comboLength or EXPECT.swing == "Lunge", "the wave only comes with the finisher (swing " .. i .. ")")
 				end
 				-- the structure is checked the moment it appears
 				check(wave:FindFirstChildOfClass("LinearVelocity") ~= nil, "the wave flies with a LinearVelocity")
@@ -333,7 +415,7 @@ if EXPECT.wave ~= "off" then
 		if fired then
 			break
 		end
-		Mock.run(gap - 0.6) -- keep the swings close enough to chain a combo
+		Mock.run(math.max(0.05, gap - frames / 60)) -- keep the swings close enough to chain a combo
 	end
 	check(fired == EXPECT.waveFires, "a sword wave is fired exactly when expected (fired=" .. tostring(fired) .. ")")
 	if fired and EXPECT.waveFires then
@@ -343,10 +425,117 @@ if EXPECT.wave ~= "off" then
 	end
 end
 
+------------------------------------------------------------------ the animator turns the joints (R6 and R15), checked against the JS pose math
+if ANIM and animatorScript then
+	local function mat(t)
+		return CFrame.new(0, 0, 0, t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9])
+	end
+	local function rotOnly(cf)
+		return cf - cf.Position
+	end
+	local function near(a, b)
+		if (a.Position - b.Position).Magnitude > 0.02 then
+			return false
+		end
+		for i = 1, 9 do
+			if math.abs(a.r[i] - b.r[i]) > 0.02 then
+				return false
+			end
+		end
+		return true
+	end
+	local function expectedFor(kind, orig, m, dy, dz)
+		local at = function(key, extra)
+			return CFrame.new(orig[key].Position + (extra or Vector3.new(0, 0, 0)))
+		end
+		local out = {}
+		if kind == "R6" then
+			out.root = at("root", Vector3.new(0, dy, dz)) * mat(m.to) * rotOnly(orig.root)
+			out.rhip = at("rhip") * mat(m.to):Inverse() * mat(m.rl) * rotOnly(orig.rhip)
+			out.lhip = at("lhip") * mat(m.to):Inverse() * mat(m.ll) * rotOnly(orig.lhip)
+		else
+			out.root = at("root", Vector3.new(0, dy, dz)) * rotOnly(orig.root)
+			out.waist = at("waist") * mat(m.to) * rotOnly(orig.waist)
+			out.rhip = at("rhip") * mat(m.rl) * rotOnly(orig.rhip)
+			out.lhip = at("lhip") * mat(m.ll) * rotOnly(orig.lhip)
+		end
+		out.neck = at("neck") * mat(m.he) * rotOnly(orig.neck)
+		out.rsh = at("rsh") * mat(m.ra) * rotOnly(orig.rsh)
+		out.lsh = at("lsh") * mat(m.la) * rotOnly(orig.lsh)
+		out.grip = orig.grip * mat(m.wr)
+		return out
+	end
+
+	-- a second player with an R15 body holding a bare tool that carries the same moves
+	local player2 = Mock.makePlayer("Tester15")
+	local character15, humanoid15 = Mock.spawnCharacter(player2, Vector3.new(30, 3, 0))
+	humanoid15.MaxHealth = 1000000
+	local rig15 = Mock.makeRig(character15, "R15")
+	local orig15 = {}
+	for key, joint in pairs(rig15) do
+		orig15[key] = joint.C0
+	end
+	local tool15 = Instance.new("Tool")
+	tool15.Name = "R15Sword"
+	tool15:SetAttribute("SFMoves", tool:GetAttribute("SFMoves"))
+	tool15.Parent = player2.Backpack
+	tool15.Parent = character15
+	Mock.run(0.2)
+
+	local counter = 1000
+	local function drive(host, id, u, dur)
+		counter += 1
+		host:SetAttribute("SFIdle", "")
+		host:SetAttribute("SFPlay", string.format("%s|%.3f|%.3f|%d", id, workspace:GetServerTimeNow() - u * dur / 0.001, 0.001, counter))
+	end
+
+	for _, sample in ipairs(ANIM.samples) do
+		for _, which in ipairs({ "R6", "R15" }) do
+			local host = which == "R6" and tool or tool15
+			local joints = which == "R6" and rig6 or rig15
+			local orig = which == "R6" and orig6 or orig15
+			drive(host, sample.id, sample.u, sample.dur)
+			Mock.run(0.4) -- the cross-fade is long over
+			local want = expectedFor(which, orig, sample.m, sample.dy, sample.dz)
+			local bad = {}
+			for key, cf in pairs(want) do
+				if joints[key] and not near(joints[key].C0, cf) then
+					table.insert(bad, key)
+				end
+			end
+			table.sort(bad)
+			check(#bad == 0, which .. " pose of " .. sample.id .. " at u=" .. sample.u .. " matches the JS math" .. (#bad > 0 and (" (wrong: " .. table.concat(bad, ",") .. ")") or ""))
+		end
+	end
+
+	-- both bodies are moved by the animator at the same time, and putting the sword away restores them
+	tool15.Parent = player2.Backpack
+	Mock.run(0.3)
+	local restored = true
+	for key, joint in pairs(rig15) do
+		if not near(joint.C0, orig15[key]) then
+			restored = false
+		end
+	end
+	check(restored, "R15 joints are restored when the sword is put away")
+	tool15:Destroy()
+end
+
 ------------------------------------------------------------------ unequip + cleanup
 tool.Parent = backpack
 Mock.run(0.4)
 check((tool.Grip.LookVector - baseLook).Magnitude < 1e-6, "grip restored on unequip")
+if ANIM and animatorScript then
+	local restored6 = true
+	for key, joint in pairs(rig6) do
+		local o = orig6[key]
+		if (joint.C0.Position - o.Position).Magnitude > 1e-6 or math.abs(joint.C0.r[1] - o.r[1]) > 1e-6 or math.abs(joint.C0.r[5] - o.r[5]) > 1e-6 then
+			restored6 = false
+		end
+	end
+	check(restored6, "R6 joints are restored when the sword is put away")
+	check(tool:GetAttribute("SFIdle") == "", "SFIdle is cleared on unequip")
+end
 for _, t in ipairs(trails) do
 	if t:GetAttribute("Trigger") == "swing" then
 		check(t.Enabled == false, "swing trail off after unequip")
@@ -381,6 +570,12 @@ check(#character:GetChildren() >= 3, "character still has its parts")
 for _, err in ipairs(Mock.errors) do
 	check(false, "script error: " .. err)
 end
+local expectedWarnings = EXPECT.animatorMissing and 1 or 0
 for _, w in ipairs(Mock.warnings) do
-	check(false, "warning: " .. w)
+	if expectedWarnings > 0 and string.find(w, "no LocalScript named SwordForgeAnimator", 1, true) then
+		expectedWarnings -= 1
+	else
+		check(false, "warning: " .. w)
+	end
 end
+check(expectedWarnings == 0, "the missing-animator warning appeared exactly once when expected")

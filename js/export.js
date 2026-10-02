@@ -5,15 +5,22 @@
   const xmlText = (s) => String(s).replace(/[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const cdata = (s) => '<![CDATA[' + String(s).replace(/[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD]/g, '').replace(/\]\]>/g, ']]]]><![CDATA[>') + ']]>';
 
-  // One Script instance; drop it on ServerScriptService and it hands the sword to every player.
+  // One Script instance (drop it on ServerScriptService and it hands the sword to every player).
+  // A sword with animations also gets the SwordForgeAnimator LocalScript as a child of that Script.
   SF.rbxmx = function (cfg) {
     const gen = SF.generate(cfg, 'script');
     const name = (gen.model.cfg.name || 'Sword') + ' (Sword Forge)';
+    const child = gen.animator
+      ? '\t\t<Item class="LocalScript" referent="RBX1">\n\t\t\t<Properties>\n' +
+        '\t\t\t\t<string name="Name">SwordForgeAnimator</string>\n' +
+        '\t\t\t\t<ProtectedString name="Source">' + cdata(gen.animator) + '</ProtectedString>\n' +
+        '\t\t\t</Properties>\n\t\t</Item>\n'
+      : '';
     return '<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">\n' +
       '\t<Item class="Script" referent="RBX0">\n\t\t<Properties>\n' +
       '\t\t\t<string name="Name">' + xmlText(name) + '</string>\n' +
       '\t\t\t<ProtectedString name="Source">' + cdata(gen.code) + '</ProtectedString>\n' +
-      '\t\t</Properties>\n\t</Item>\n</roblox>\n';
+      '\t\t</Properties>\n' + child + '\t</Item>\n</roblox>\n';
   };
   SF.rbxmxFileName = (cfg) => ((cfg.name || 'Sword').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'Sword') + '.rbxmx';
 
