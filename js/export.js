@@ -2,8 +2,8 @@
 (function (SF) {
   'use strict';
 
-  const xmlText = (s) => String(s).replace(/[^\x09\x0A\x0D\x20-퟿-�]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const cdata = (s) => '<![CDATA[' + String(s).replace(/[^\x09\x0A\x0D\x20-퟿-�]/g, '').replace(/\]\]>/g, ']]]]><![CDATA[>') + ']]>';
+  const xmlText = (s) => String(s).replace(/[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const cdata = (s) => '<![CDATA[' + String(s).replace(/[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD]/g, '').replace(/\]\]>/g, ']]]]><![CDATA[>') + ']]>';
 
   // One Script instance; drop it on ServerScriptService and it hands the sword to every player.
   SF.rbxmx = function (cfg) {
