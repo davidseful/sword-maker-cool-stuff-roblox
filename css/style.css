@@ -337,7 +337,7 @@ svg.ico { display: block; flex: none; }
 .pal:hover { border-color: var(--faint); }
 .pal i { display: block; border-radius: 2px; }
 .pal i:first-child { grid-row: 1 / 3; grid-column: 1 / 2; width: 12px; height: 26px; }
-.tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--line-soft); }
+.tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--line-soft); }
 .tab {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
   padding: 9px 4px 8px;
@@ -652,3 +652,25 @@ details.fold ul { margin: 6px 0; padding-left: 18px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---- export dialog: which of the two scripts is shown */
+.part-row { padding: 8px 14px 0; }
+.part-row:has(.part-tabs[hidden]) { display: none; }
+
+/* ---- Moves tab */
+.movelist { display: grid; gap: 6px; margin: 4px 0 14px; }
+.move {
+  display: flex; align-items: center; gap: 10px; text-align: left; width: 100%;
+  padding: 8px 10px; background: var(--plate-2); border: 1px solid var(--line-soft); border-radius: var(--r-s); color: var(--muted);
+}
+.move:hover { color: var(--text); border-color: var(--line); }
+.move[aria-pressed="true"] { color: var(--text); border-color: var(--temper); background: color-mix(in srgb, var(--temper) 10%, var(--plate-2)); }
+.move b { display: block; font-size: 12.5px; color: var(--text); font-weight: 700; line-height: 1.2; }
+.move small { display: block; font-size: 11.5px; color: var(--muted); line-height: 1.3; margin-top: 1px; }
+.move .dot { flex: none; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line); }
+.move[aria-pressed="true"] .dot { border-color: var(--temper-strong); background: var(--temper-strong); box-shadow: inset 0 0 0 2px var(--plate-2); }
+.swingrow { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 10px; margin: 0 0 6px; background: var(--plate-2); border: 1px solid var(--line-soft); border-radius: var(--r-s); }
+.swingrow .n { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--plate-3); font: 700 11.5px/1 var(--font-mono); color: var(--muted); }
+.swingrow .select { flex: 1; min-width: 0; }
+.swingrow .btn.icon { min-width: 30px; min-height: 30px; padding: 0; }
+.swingrow .n.fin { background: color-mix(in srgb, var(--straw) 22%, var(--plate-3)); color: var(--straw); box-shadow: inset 0 0 0 1px var(--straw); }

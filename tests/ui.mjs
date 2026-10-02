@@ -64,7 +64,7 @@ async function openPage(viewport, extra, init) {
   eq(await page.locator('#cards .card[aria-pressed="true"]').getAttribute('data-id'), 'frost', 'the clicked card is highlighted');
 
   // tabs
-  for (const t of ['hilt', 'fx', 'powers', 'blade']) {
+  for (const t of ['hilt', 'fx', 'moves', 'powers', 'blade']) {
     await page.click('#tab-' + t);
     check((await page.locator('#panel .field, #panel .layer, #panel .addbtn').count()) > 3, `the ${t} tab shows controls`);
     const leaked = await strays(page);
@@ -73,6 +73,42 @@ async function openPage(viewport, extra, init) {
   {
     const leaked = await strays(page);
     check(leaked.length === 0, `no leaked null/undefined text on the page header and stats: ${leaked.join(' | ')}`);
+  }
+
+  // moves tab: the combo can be edited, and every premade sword plays moves
+  {
+    check(await page.evaluate(() => SF.PRESETS.every((p) => p.cfg.anim.on && p.cfg.anim.swings.length >= 3 && p.cfg.anim.idle !== 'none' && p.cfg.anim.equip !== 'none')), 'every premade sword has a stance, a flourish and a 3-swing combo');
+    await page.click('#tab-moves');
+    const rows = () => page.locator('#panel .swingrow').count();
+    const before = await rows();
+    check(before >= 3, 'the Moves tab lists the combo (' + before + ')');
+    await page.click('#panel .addbtn >> nth=0');
+    eq(await rows(), before + 1, 'adding a swing adds a row');
+    eq(await page.evaluate(() => SF.app.state.cfg.anim.swings.length), before + 1, 'and the sword config follows');
+    await page.click('#panel .swingrow >> nth=-1 >> button[aria-label="Remove this swing"]');
+    eq(await rows(), before, 'removing a swing removes the row');
+    await page.click('#panel .swingrow >> nth=0 >> button[aria-label="Move later"]');
+    await page.click('#panel .swingrow >> nth=0 >> button[aria-label="Preview this swing"]');
+    const stanceBefore = await page.evaluate(() => SF.app.state.cfg.anim.idle);
+    await page.click('#panel .movelist >> nth=0 >> .move >> nth=0');
+    eq(await page.evaluate(() => SF.app.state.cfg.anim.idle), 'none', 'picking "None" turns the stance off');
+    await page.evaluate(() => { const c = SF.app.state.cfg; c.anim.idle = 'rest'; SF.app.commit(); });
+    check(stanceBefore !== 'none', 'the sword started with a stance');
+    // the switch hides the rest
+    await page.evaluate(() => { document.querySelector('#panel .field.row input[type=checkbox]').click(); });
+    check(await page.evaluate(() => !SF.app.state.cfg.anim.on), 'the animation switch turns animations off');
+    check(await page.evaluate(() => [...document.querySelectorAll('#panel section.group')].slice(1).every((g) => g.hidden)), 'the other Moves groups hide while it is off');
+    await page.evaluate(() => { document.querySelector('#panel .field.row input[type=checkbox]').click(); });
+    check(await page.evaluate(() => SF.app.state.cfg.anim.on), 'and back on');
+    // the avatar really poses: the preview scene moves its arm while a swing plays
+    const moved = await page.evaluate(async () => {
+      const sc = SF.app.preview.scene; sc.swing();
+      let lo = 1e9, hi = -1e9;
+      for (let i = 0; i < 16; i++) { const v = sc.pose.ra[0]; lo = Math.min(lo, v); hi = Math.max(hi, v); await new Promise((r) => setTimeout(r, 50)); }
+      return hi - lo;
+    });
+    check(moved > 5, 'the preview avatar moves its arm during a swing (' + moved.toFixed(1) + ' degrees)');
+    await page.click('#tab-blade');
   }
 
   // slider -> model
@@ -134,7 +170,13 @@ async function openPage(viewport, extra, init) {
   check(/local function setupCombat/.test(code), 'the combat code is included');
   check((await page.$eval('#export-dlg .code-meta', (e) => e.textContent)).includes('lines'), 'the size is shown');
   if (shots) await page.screenshot({ path: path.join(outDir, 'ui-export.png') });
+  check(await page.locator('#export-dlg .part-tabs').isVisible(), 'an animated sword shows the Sword Script / Animator tabs');
+  await page.click('#export-dlg .part-tabs button >> nth=1');
+  check((await page.$eval('#export-dlg .code', (el) => el.textContent)).includes('SwordForgeAnimator'), 'the Animator tab shows the LocalScript code');
+  check((await page.$eval('#export-dlg .copy-lab', (el) => el.textContent)) === 'Copy animator', 'the copy button says what it copies');
+  await page.click('#export-dlg .part-tabs button >> nth=0');
   await page.click('#export-dlg .seg button >> nth=1');
+  check(!(await page.locator('#export-dlg .part-tabs').isVisible()), 'command bar mode has one script, so no tabs');
   const code2 = await page.$eval('#export-dlg .code', (el) => el.textContent);
   check(code2.includes('COMBAT_SOURCE') && code2.includes('StarterPack'), 'command bar mode shows the builder script');
   await page.click('#export-dlg .seg button >> nth=0');
@@ -147,6 +189,7 @@ async function openPage(viewport, extra, init) {
     check(/\.rbxmx$/.test(dl.suggestedFilename()), 'Studio file downloads a .rbxmx: ' + dl.suggestedFilename());
     const body = fs.readFileSync(await dl.path(), 'utf8');
     check(body.startsWith('<roblox') && body.includes('class="Script"') && body.includes('setupCombat'), 'the .rbxmx holds the sword Script');
+    check(body.includes('class="LocalScript"') && body.includes('SwordForgeAnimator'), 'an animated sword .rbxmx carries the animator LocalScript');
   }
   await page.keyboard.press('Escape');
 
@@ -158,7 +201,7 @@ async function openPage(viewport, extra, init) {
       await page.click(`.card[data-id="${plainId}"]`);
       await page.click('.cta-desktop');
       await page.waitForSelector('#export-dlg[open]');
-      eq(await page.locator('#export-summary li').count(), 3, 'the export summary lists three facts for a sword without powers');
+      eq(await page.locator('#export-summary li').count(), 4, 'the export summary lists four facts for a sword with animations but no powers');
       const summary = await page.$eval('#export-summary', (e) => e.textContent);
       check(!/null|undefined|false/.test(summary), 'the export summary has no leaked null: ' + summary);
       const leaked = await strays(page);

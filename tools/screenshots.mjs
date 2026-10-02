@@ -25,6 +25,10 @@ const jpg = (page, name) => page.screenshot({ path: path.join(out, name), type: 
   await page.click('#tab-fx');
   await page.waitForTimeout(400);
   await jpg(page, 'main.jpg');
+  await page.click('#tab-moves');
+  await page.evaluate(() => SF.app.preview.swing());
+  await page.waitForTimeout(420);
+  await jpg(page, 'moves.jpg');
   await page.click('.cta-desktop');
   await page.waitForTimeout(900);
   await jpg(page, 'export.jpg');
@@ -36,4 +40,4 @@ const jpg = (page, name) => page.screenshot({ path: path.join(out, name), type: 
   await ctx.close();
 }
 await browser.close();
-console.log('wrote docs/main.jpg, docs/export.jpg, docs/phone.jpg');
+console.log('wrote docs/main.jpg, docs/moves.jpg, docs/export.jpg, docs/phone.jpg');

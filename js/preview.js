@@ -13,9 +13,7 @@
   const FOV = 34 * D2R;
 
   // right shoulder and the hand position of the "holding a tool" pose (studs, avatar faces -Z)
-  const PIVOT = [1.0, 3.5, 0];
   const GRIP0 = [1.5, 3.5, -1.5];
-  const SWING_TOTAL = 0.74;
 
   const rgb01 = (hex) => SF.hex2rgb(hex).map((v) => v / 255);
   const seqAt = (list, u) => {
@@ -57,38 +55,37 @@
     return () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
   }
 
-  /* arm angle (radians, 0 = holding the sword up in front) over the swing:
-     wind up, chop down, follow through, settle. */
-  function armAngle(t) {
-    if (t < 0) return 0;
-    const K = [[0, 0], [0.13, 72], [0.31, -56], [0.43, -58], [SWING_TOTAL, 0]];
-    for (let i = 1; i < K.length; i++) {
-      if (t <= K[i][0]) {
-        const u = (t - K[i - 1][0]) / (K[i][0] - K[i - 1][0]);
-        const e = i === 1 ? 1 - (1 - u) * (1 - u) : smooth(u);
-        return (K[i - 1][1] + (K[i][1] - K[i - 1][1]) * e) * D2R;
-      }
-    }
-    return 0;
-  }
+  /* the plain "no custom animation" swing: wind up, chop down, follow through, settle (right arm only) */
+  const DEFAULT_MOVE = (() => {
+    const K = [[0, 0, 'io'], [0.13, 72, 'out'], [0.31, -56, 'io'], [0.43, -58, 'io'], [0.74, 0, 'io']];
+    return {
+      kind: 'swing', dur: 0.74, hit: [0.135, 0.675], loop: false,
+      keys: K.map((kf) => { const pose = SF.zeroPose(); pose.ra[0] = kf[1]; return { t: kf[0] / 0.74, e: kf[2], pose }; }),
+    };
+  })();
 
-  /* --------------------------------------------------------------- avatar */
+  /* --------------------------------------------------------------- avatar
+     A blocky R6-style character. g = which body part a box belongs to. The pivots are the real R6 joint
+     positions, so poses written for the Roblox rig look the same here.                                */
   const AVATAR = (() => {
     const c = (h) => rgb01(h);
     const skin = c('#e6c35a'), shirt = c('#3d73bf'), pants = c('#5fa655'), dark = c('#1b1d26');
-    const box = (pos, size, color, extra) => Object.assign({ mesh: 'box', pos, size, color, spec: 0.28, shin: 30, metal: 0, emit: 0, alpha: 1, rim: 0.12, rot: M.I3 }, extra);
+    const box = (g, pos, size, color) => ({ g, mesh: 'box', pos, size, color, spec: 0.28, shin: 30, rim: 0.12 });
     return [
-      box([0, 4.5, 0], [2, 1, 1], skin),
-      box([-0.32, 4.62, -0.51], [0.2, 0.24, 0.06], dark),
-      box([0.32, 4.62, -0.51], [0.2, 0.24, 0.06], dark),
-      box([0, 4.3, -0.51], [0.7, 0.09, 0.06], dark),
-      box([0, 3, 0], [2, 2, 1], shirt),
-      box([-1.5, 3, 0], [1, 2, 1], skin),
-      box([-0.5, 1, 0], [1, 2, 1], pants),
-      box([0.5, 1, 0], [1, 2, 1], pants),
-      box([1.5, 3, 0], [1, 2, 1], skin, { arm: true }),
+      box('he', [0, 4.5, 0], [2, 1, 1], skin),
+      box('he', [-0.32, 4.62, -0.51], [0.2, 0.24, 0.06], dark),
+      box('he', [0.32, 4.62, -0.51], [0.2, 0.24, 0.06], dark),
+      box('he', [0, 4.3, -0.51], [0.7, 0.09, 0.06], dark),
+      box('to', [0, 3, 0], [2, 2, 1], shirt),
+      box('la', [-1.5, 3, 0], [1, 2, 1], skin),
+      box('ll', [-0.5, 1, 0], [1, 2, 1], pants),
+      box('rl', [0.5, 1, 0], [1, 2, 1], pants),
+      box('ra', [1.5, 3, 0], [1, 2, 1], skin),
     ];
   })();
+  const PIV = { he: [0, 4, 0], ra: [1, 3.5, 0], la: [-1, 3.5, 0], rl: [0.5, 2, 0], ll: [-0.5, 2, 0] };
+  const WAIST = [0, 3, 0];                       // the torso turns about its middle (the R6 root joint)
+  const HOLD = M.rotX(90 * D2R);                 // the right arm already points forward when it holds a tool
 
   /* ------------------------------------------------------------------ Scene */
   class Scene {
@@ -97,8 +94,15 @@
       this.thumb = !!opts.thumb;
       this.avatar = opts.avatar !== false && !this.thumb;
       this.t = 0;
-      this.swingT = -1;
       this.equipT = 1;
+      this.pose = SF.zeroPose();                 // what the body is doing right now
+      this.mv = null;                            // the move that is playing: { r, t, kind, fired }
+      this.idleR = null;
+      this.speed = 1;
+      this.combo = 0;
+      this.blend = null;                         // cross-fade from the previous pose
+      this.gripFwd = false;
+      this.swingOn = false;                      // true while the blade is "live" (trail, emitters)
       this.particles = [];
       this.rand = rng(1234567);
       this.emitters = [];
@@ -137,6 +141,10 @@
       this.arcs = this.fx.filter((e) => e.kind === 'arcs').map((d) => ({ d, acc: 0 }));
       this.flipWedge = !!cfg.wedgeFlip;
       this.tilt = cfg.hold.tilt;
+      this.anim = cfg.anim;
+      this.speed = cfg.anim.on ? cfg.anim.speed : 1;
+      this.idleR = cfg.anim.on && cfg.anim.idle !== 'none' ? SF.resolveMove(cfg.anim.idle) : null;
+      if (this.mv && this.mv.kind === 'swing' && !this.mv.legacy && !cfg.anim.on) this.mv = null;
       // colour that tints the room (used by the background glow)
       const neon = this.parts.find((p) => p.role === 'blade' && p.look.emit >= 0.9);
       this.accent = this.glow ? this.glow.color.map((v) => v / 255)
@@ -150,30 +158,92 @@
       if (opts.equip !== false) {
         this.equipT = 0;
         this.pending.equip = true;
+        this.combo = 0;
+        const eq = cfg.anim.on && cfg.anim.equip !== 'none' ? SF.resolveMove(cfg.anim.equip) : null;
+        if (eq && !this.thumb) this.startMove(eq, 'equip');
       }
       this.trail = null;
     }
 
+    startMove(r, kind, legacy) {
+      this.blend = { from: SF.zeroPose(), t: 0, dur: kind === 'swing' ? 0.08 : 0.12 };
+      this.copyPose(this.pose, this.blend.from);
+      this.mv = { r, t: 0, kind, legacy: !!legacy, burst: false, struck: false };
+      this.swingOn = false;
+    }
+    copyPose(a, b) {
+      SF.ANIM_CH3.forEach((ch) => { for (let i = 0; i < 3; i++) b[ch][i] = a[ch][i]; });
+      b.dy = a.dy; b.dz = a.dz;
+    }
+
+    /* the next hit of the combo (or the plain swing when the sword has no moves) */
     swing() {
-      if (this.swingT < 0 || this.swingT > 0.5) {
-        this.swingT = 0;
-        this.struck = false;
-        this.burstDone = false;
+      const an = this.anim;
+      if (this.mv && this.mv.kind === 'swing' && this.mv.t * this.speed / this.mv.r.dur < 0.5) return;
+      if (!an || !an.on || !an.swings.length) { this.startMove(DEFAULT_MOVE, 'swing', true); return; }
+      const id = an.swings[this.combo % an.swings.length];
+      this.combo++;
+      this.startMove(SF.resolveMove(id), 'swing');
+    }
+    playMove(id) {
+      const r = SF.resolveMove(id);
+      if (!r || r.kind === 'idle') return;
+      this.startMove(r, r.kind);
+    }
+
+    /* body pose for this frame: the playing move, or the idle stance, cross-faded */
+    updatePose(dt) {
+      let target;
+      const mv = this.mv;
+      if (mv) {
+        mv.t += dt * this.speed;
+        const u = mv.t / mv.r.dur;
+        if (u >= 1) { this.mv = null; this.swingOn = false; this.blend = { from: SF.zeroPose(), t: 0, dur: 0.18 }; this.copyPose(this.pose, this.blend.from); }
+        else {
+          target = SF.poseAt(mv.r, u);
+          if (mv.kind === 'swing') {
+            const h = mv.r.hit;
+            if (!mv.burst && u >= h[0]) { mv.burst = true; this.pending.burst = true; }
+            if (!mv.struck && u >= h[0] + (h[1] - h[0]) * 0.35) { mv.struck = true; this.pending.hit = true; }
+            this.swingOn = u >= h[0] - 0.04 && u <= h[1] + 0.08;
+          }
+        }
+      }
+      if (!target) {
+        target = this.idleR ? SF.poseAt(this.idleR, (this.t / this.idleR.dur) % 1) : SF.zeroPose();
+        if (!this.idleR) target.ra[0] = Math.sin(this.t * 1.7) * 1.0;   // a tiny hand bob
+      }
+      const bl = this.blend;
+      if (bl && bl.t < bl.dur) {
+        bl.t += dt;
+        const w = Math.min(1, bl.t / bl.dur);
+        SF.blendPose(bl.from, target, w * w * (3 - 2 * w), this.pose);
+      } else {
+        this.copyPose(target, this.pose);
       }
     }
 
-    /* sword placement in the world */
-    updateTransform(bob) {
-      const a = (this.thumb ? 0 : armAngle(this.swingT)) + bob;
+    /* sword placement in the world (follows the right hand) */
+    updateTransform() {
       const tilt = this.tilt * D2R;
       if (this.thumb) {
         this.xf = { R: M.rotX(-tilt), p: [0, -(this.swordTop + this.swordBottom) / 2, 0] };
         return;
       }
-      const arm = M.rotX(a);
-      const off = V.sub(GRIP0, PIVOT);
-      this.xf = { R: M.rotX(a - tilt), p: V.add(PIVOT, M.mulV(arm, off)) };
-      this.armR = arm;
+      const ps = this.pose;
+      const Rt = M.eulerToMat(ps.to), Rd = M.eulerToMat(ps.ra);
+      const RtRd = M.mul3(Rt, Rd);
+      const sh = this.upper(PIV.ra);
+      const off = M.mulV(RtRd, V.sub(GRIP0, PIV.ra));
+      const R = M.mul3(RtRd, M.mul3(M.eulerToMat(ps.wr), M.rotX(-tilt)));            // wr: the wrist turns the sword in the hand
+      this.xf = { R, p: V.add(sh, off) };
+    }
+    /* a point on the upper body after the root offset and the torso turn */
+    upper(p) {
+      const ps = this.pose;
+      const Rt = M.eulerToMat(ps.to);
+      const q = M.mulV(Rt, V.sub(p, WAIST));
+      return [WAIST[0] + q[0], WAIST[1] + q[1] + ps.dy, WAIST[2] + q[2] + ps.dz];
     }
 
     toWorld(lp, sc) {
@@ -236,16 +306,11 @@
     update(dt) {
       if (!this.model) return;
       this.t += dt;
-      const sw = this.swingT;
-      if (this.swingT >= 0) {
-        this.swingT += dt;
-        if (this.swingT >= 0.1 && !this.burstDone) { this.burstDone = true; this.pending.burst = true; }
-        if (this.swingT >= 0.22 && !this.struck) { this.struck = true; this.pending.hit = true; }
-        if (this.swingT > SWING_TOTAL) this.swingT = -1;
-      }
-      const swinging = this.swingT >= 0.1 && this.swingT <= 0.5;
       if (this.equipT < 1) this.equipT = Math.min(1, this.equipT + dt / 0.5);
-      this.updateTransform(this.thumb ? 0 : Math.sin(this.t * 1.7) * 0.018);
+      this.updatePose(dt);
+      this.updateTransform();
+      const swinging = this.swingOn;
+      const sw = this.swingOn ? 1 : -1;
 
       // emitters
       this.emitters.forEach((e) => {
@@ -319,12 +384,22 @@
       });
 
       if (this.avatar) {
-        const armPivotR = this.armR || M.I3;
+        const ps = this.pose;
+        const Rt = M.eulerToMat(ps.to);
+        const R = {
+          he: M.mul3(Rt, M.eulerToMat(ps.he)),
+          ra: M.mul3(Rt, M.mul3(M.eulerToMat(ps.ra), HOLD)),
+          la: M.mul3(Rt, M.eulerToMat(ps.la)),
+          rl: M.eulerToMat(ps.rl),                // the legs keep their own turn: the hips cancel the torso
+          ll: M.eulerToMat(ps.ll),
+          to: Rt,
+        };
         AVATAR.forEach((a) => {
-          let pos = a.pos, rot = M.I3;
-          if (a.arm) {
-            pos = V.add(PIVOT, M.mulV(armPivotR, V.sub(a.pos, PIVOT)));
-            rot = armPivotR;
+          let pos, rot = R[a.g];
+          if (a.g === 'to') pos = this.upper(a.pos);
+          else {
+            const pv = PIV[a.g];
+            pos = V.add(this.upper(pv), M.mulV(rot, V.sub(a.pos, pv)));
           }
           parts.push({ mesh: a.mesh, pos, rotCol: toCol3(rot), size: a.size, color: a.color, spec: a.spec, shin: a.shin, metal: 0, emit: 0, alpha: 1, rim: a.rim, depth: V.dot(V.sub(pos, eye), fwd) });
         });
@@ -474,6 +549,7 @@
     }
 
     swing() { this.scene.swing(); }
+    playMove(id) { this.scene.playMove(id); }
     setAvatar(on) { this.scene.avatar = on; this.frameCamera(); }
     setAutoRotate(on) { this.autoRotate = on; }
     setTheme(name) { this.theme = THEMES[name] ? name : 'forge'; }

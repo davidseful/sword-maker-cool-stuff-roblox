@@ -379,7 +379,7 @@
   }
 
   /* ------------------------------------------------------------------- tabs */
-  const TABS = [['blade', 'Blade', 'blade'], ['hilt', 'Hilt', 'hilt'], ['fx', 'Effects', 'effects'], ['powers', 'Powers', 'powers']];
+  const TABS = [['blade', 'Blade', 'blade'], ['hilt', 'Hilt', 'hilt'], ['fx', 'Effects', 'effects'], ['moves', 'Moves', 'moves'], ['powers', 'Powers', 'powers']];
 
   function buildTabs() {
     const tabs = $('#tabs');
@@ -420,7 +420,7 @@
     panel.innerHTML = '';
     panel.setAttribute('aria-labelledby', 'tab-' + state.tab);
     syncers = [];
-    ({ blade: bladeTab, hilt: hiltTab, fx: fxTab, powers: powersTab })[state.tab](panel);
+    ({ blade: bladeTab, hilt: hiltTab, fx: fxTab, moves: movesTab, powers: powersTab })[state.tab](panel);
     syncAll();
     panel.scrollTop = top;
   }
@@ -636,6 +636,81 @@
     });
     void open;
     return card;
+  }
+
+  /* ---- Moves tab: the animations (swing combo, stance, equip flourish) */
+  function movesTab(root) {
+    const swingIds = SF.movesOf('swing');
+    const finisherNote = 'A combo cycles through these in order. The last hit of the combo is the finisher: it hits harder and lunges.';
+    const whenOn = (el) => { showWhen(el, (c) => c.anim.on); return el; };
+    const edit = (fn, play) => {
+      fn(state.cfg.anim);
+      state.cfg.anim = SF.normAnim(state.cfg.anim);
+      syncers = [];
+      commit();
+      pushHistory();
+      renderTab();
+      if (play && preview) preview.playMove(play);
+    };
+
+    // one radio-style list for the stance / equip flourish
+    const pickList = (kind, key) => {
+      const ids = ['none'].concat(SF.movesOf(kind));
+      const list = h('div', { class: 'movelist', role: 'radiogroup' });
+      const btns = ids.map((id) => {
+        const m = SF.MOVES[id];
+        const b = h('button', { type: 'button', class: 'move', role: 'radio', 'aria-pressed': 'false',
+          onclick: () => edit((a) => { a[key] = id; }, kind === 'equip' && id !== 'none' ? id : null) },
+        h('span', { class: 'dot' }),
+        h('span', {}, h('b', {}, m ? m.label : 'None (Roblox default)'), h('small', {}, m ? m.blurb : 'No custom ' + (kind === 'idle' ? 'stance' : 'flourish') + '. The character holds the sword like normal.')));
+        list.append(b);
+        return b;
+      });
+      reg(() => btns.forEach((b, i) => b.setAttribute('aria-pressed', String(ids[i] === state.cfg.anim[key]))));
+      return list;
+    };
+
+    const swings = state.cfg.anim.swings;
+    const rows = swings.map((id, i) => {
+      const sel = h('select', { 'aria-label': 'Swing ' + (i + 1) });
+      swingIds.forEach((sid) => sel.append(h('option', { value: sid }, SF.MOVES[sid].label)));
+      sel.value = id;
+      sel.addEventListener('change', () => edit((a) => { a.swings[i] = sel.value; }, sel.value));
+      const last = i === swings.length - 1 && swings.length >= 2;
+      const small = (icon, label, fn, flip, off) => {
+        const b = h('button', { type: 'button', class: 'btn icon ghost', 'aria-label': label, title: label, onclick: fn }, iconEl(icon, 16));
+        if (flip) b.firstChild.style.transform = 'rotate(180deg)';
+        if (off) b.disabled = true;
+        return b;
+      };
+      return h('div', { class: 'swingrow' },
+        h('span', { class: 'n' + (last ? ' fin' : ''), title: last ? 'The finisher: hits harder and lunges' : 'Hit ' + (i + 1) }, String(i + 1)),
+        h('span', { class: 'select' }, sel, iconEl('chevron', 14)),
+        small('play', 'Preview this swing', () => preview && preview.playMove(id)),
+        small('up', 'Move earlier', () => edit((a) => { const t = a.swings[i]; a.swings[i] = a.swings[i - 1]; a.swings[i - 1] = t; }), false, i === 0),
+        small('up', 'Move later', () => edit((a) => { const t = a.swings[i]; a.swings[i] = a.swings[i + 1]; a.swings[i + 1] = t; }), true, i === swings.length - 1),
+        small('trash', 'Remove this swing', () => edit((a) => { a.swings.splice(i, 1); })));
+    });
+    const full = swings.length >= SF.ANIM_MAX_SWINGS;
+    const addBar = h('div', { class: 'addbar' }, swingIds.map((id) => h('button', { type: 'button', class: 'addbtn', disabled: full, title: SF.MOVES[id].blurb,
+      onclick: () => edit((a) => { a.swings.push(id); }, id) },
+    iconEl('swing', 18), h('span', {}, h('b', {}, SF.MOVES[id].label), h('small', {}, SF.MOVES[id].blurb)))));
+
+    root.append(
+      group('Animations', [
+        switchf({ label: 'Move the character', acc: cfgAcc(['anim', 'on']), hint: 'Swings, a stance and an equip flourish that match your sword. Off = Roblox\'s normal swing.' }),
+        whenOn(slider({ label: 'Speed', acc: cfgAcc(['anim', 'speed']), min: SF.ANIM_SPEED.min, max: SF.ANIM_SPEED.max, step: SF.ANIM_SPEED.step, unit: 'x' })),
+      ]),
+      whenOn(group('Your combo (' + swings.length + ')', [
+        rows.length ? h('div', {}, rows) : h('div', { class: 'empty-fx' }, h('b', {}, 'No swings yet'), h('p', { class: 'hint-text' }, 'Add one below, or the sword uses Roblox\'s normal swing.')),
+        h('p', { class: 'hint-text', style: { margin: '0 0 8px' } }, finisherNote),
+        h('div', { class: 'eyebrow', style: { margin: '10px 0 4px' } }, 'Add a swing'),
+        addBar,
+        full ? h('p', { class: 'hint-text' }, 'That is the most a combo can hold (' + SF.ANIM_MAX_SWINGS + ').') : null,
+      ])),
+      whenOn(group('Stance', [h('p', { class: 'hint-text', style: { margin: '0 0 8px' } }, 'How your character stands while holding the sword.'), pickList('idle', 'idle')])),
+      whenOn(group('Equip flourish', [h('p', { class: 'hint-text', style: { margin: '0 0 8px' } }, 'What happens when you pull the sword out.'), pickList('equip', 'equip')]))
+    );
   }
 
   function powersTab(root) {
@@ -871,6 +946,11 @@
   /* ------------------------------------------------------------ export dialog */
   let codeTimer = 0;
   let lastGen = null;
+  let exportPart = 'sword';                       // which script the code view shows: 'sword' or 'animator'
+  const shownText = () => {
+    const gen = lastGen || SF.generate(state.cfg, state.mode);
+    return exportPart === 'animator' && gen.animator && state.mode === 'script' ? gen.animator : gen.code;
+  };
   const exportOpen = () => $('#export-dlg').open;
   function scheduleCode() { clearTimeout(codeTimer); codeTimer = setTimeout(updateCode, 140); }
 
@@ -879,11 +959,21 @@
     if (!dlg.open) return;
     const gen = SF.generate(state.cfg, state.mode);
     lastGen = gen;
+    const tabs = $('.part-tabs', dlg);
+    const hasTabs = !!gen.animator && state.mode === 'script';
+    if (tabs) {
+      tabs.hidden = !hasTabs;
+      if (!hasTabs) exportPart = 'sword';
+      [...tabs.children].forEach((b, i) => b.setAttribute('aria-pressed', String(['sword', 'animator'][i] === exportPart)));
+      const copyLab = $('.copy-lab', dlg);
+      if (copyLab) copyLab.textContent = hasTabs && exportPart === 'animator' ? 'Copy animator' : 'Copy script';
+    }
+    const text = shownText();
     const pre = $('.code', dlg), gut = $('.gut', dlg);
-    pre.innerHTML = highlight(gen.code);
-    const n = gen.code.split('\n').length;
+    pre.innerHTML = highlight(text);
+    const n = text.split('\n').length;
     gut.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n');
-    $('.code-meta', dlg).textContent = gen.lines + ' lines · ' + (gen.bytes / 1024).toFixed(1) + ' KB';
+    $('.code-meta', dlg).textContent = (n - 1) + ' lines · ' + (text.length / 1024).toFixed(1) + ' KB';
     $('.sheet-head h2', dlg).textContent = state.cfg.name;
     renderSummary();
   }
@@ -897,22 +987,25 @@
       h('li', {}, h('b', {}, d.parts + ' parts'), ' welded into one Tool, ', d.length.toFixed(1), ' studs long'),
       h('li', {}, h('b', {}, d.effects + ' effect' + (d.effects === 1 ? '' : 's')), ' (glow, particles, trails...)'),
       h('li', {}, h('b', {}, state.cfg.combat.damage + ' damage'), ' per hit, ', state.cfg.combat.cooldown + 's cooldown'),
-      d.powers.length ? h('li', {}, h('b', {}, 'Powers: '), d.powers.join(' · ')) : null
+      d.powers.length ? h('li', {}, h('b', {}, 'Powers: '), d.powers.join(' · ')) : null,
+      d.animations.length ? h('li', {}, h('b', {}, 'Animations: '), d.animations.join(', ')) : null
     );
   }
 
   function openExport() {
     const dlg = $('#export-dlg');
     dlg.innerHTML = '';
+    exportPart = 'sword';
     const stepsEl = h('ol', { class: 'steps' });
     const modeNote = h('p', { class: 'hint-text', style: { marginTop: '8px' } });
+    const animated = !!SF.animData(state.cfg.anim);
     const paintSteps = () => {
       stepsEl.innerHTML = '';
       const S = state.mode === 'script' ? [
         ['Open your game', 'Open Roblox Studio and your place. Show the Explorer (View > Explorer).'],
         ['Add a Script', 'Hover ServerScriptService, click the + and choose Script. Delete the line of code it starts with.'],
         ['Paste and press Play', 'Paste everything you copied. Press Play, then press 1 and click to swing.'],
-      ] : [
+      ].concat(animated ? [['Add the animator', 'For the animations: right-click your new Script > Insert Object > LocalScript, name it SwordForgeAnimator, then copy the Animator tab here and paste it in. (Or use the Studio file: it has it built in.)']] : []) : [
         ['Open the Command Bar', 'In Studio choose View > Command Bar.'],
         ['Paste and press Enter', 'Paste everything you copied into the bar and press Enter.'],
         ['Find your sword', 'It appears in StarterPack. Press Play to try it, or edit its parts first.'],
@@ -937,11 +1030,11 @@
     flip.addEventListener('change', () => { state.cfg.wedgeFlip = flip.checked; commit({ keepPreset: true }); pushHistory(); });
 
     const doCopy = async () => {
-      const ok = await copyText(lastGen ? lastGen.code : SF.generate(state.cfg, state.mode).code);
+      const ok = await copyText(shownText());
       if (ok) toast('Copied! Now paste it into Studio.', 'good', 'copy');
       else { selectCode(); toast('Press Ctrl+C to copy the selected code', 'warn', 'help'); }
     };
-    const copyBtn = h('button', { type: 'button', class: 'btn primary', onclick: doCopy }, iconEl('copy', 17), 'Copy script');
+    const copyBtn = h('button', { type: 'button', class: 'btn primary', onclick: doCopy }, iconEl('copy', 17), h('span', { class: 'copy-lab' }, 'Copy script'));
     // Studio file: a .rbxmx you drag into Explorer. The Artifact viewer blocks plain downloads, so it goes through the `downloads` capability as a .zip.
     const studioBtn = h('button', { type: 'button', class: 'btn', title: 'A file you drag into Roblox Studio, no copy and paste', onclick: async () => {
       try {
@@ -954,8 +1047,9 @@
       } catch (err) { if (!err || err.code !== 'declined') toast('Could not save the file. Use Copy script.', 'warn', 'help'); }
     } }, iconEl('download', 17), ENV.canDownload ? 'Studio file (.rbxmx)' : 'Studio file (.zip)');
     const dlBtn = ENV.canDownload ? h('button', { type: 'button', class: 'btn', onclick: () => {
-      const gen = lastGen || SF.generate(state.cfg, state.mode);
-      downloadText((state.cfg.name.replace(/[^A-Za-z0-9]+/g, '_') || 'Sword') + (state.mode === 'script' ? '.server.lua' : '_builder.lua'), gen.code);
+      const base = state.cfg.name.replace(/[^A-Za-z0-9]+/g, '_') || 'Sword';
+      if (exportPart === 'animator' && state.mode === 'script') downloadText('SwordForgeAnimator.client.lua', shownText());
+      else downloadText(base + (state.mode === 'script' ? '.server.lua' : '_builder.lua'), shownText());
     } }, iconEl('download', 17), 'Download .lua') : null;
 
     dlg.append(
@@ -980,6 +1074,10 @@
         ),
         h('div', { class: 'sheet-main' },
           h('div', { class: 'code-bar' }, copyBtn, studioBtn, dlBtn, h('span', { class: 'grow' }), h('span', { class: 'code-meta' })),
+          h('div', { class: 'part-row' },
+            h('div', { class: 'seg part-tabs', role: 'group', 'aria-label': 'Which script to show', hidden: true },
+              h('button', { type: 'button', 'aria-pressed': 'true', onclick: () => { exportPart = 'sword'; updateCode(); } }, 'Sword Script'),
+              h('button', { type: 'button', 'aria-pressed': 'false', onclick: () => { exportPart = 'animator'; updateCode(); } }, 'Animator (LocalScript)'))),
           h('div', { class: 'code-wrap', tabindex: '0', 'aria-label': 'Generated Luau script' }, h('pre', { class: 'gut', 'aria-hidden': 'true' }), h('pre', { class: 'code' }))
         )
       )
