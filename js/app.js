@@ -942,6 +942,17 @@
       else { selectCode(); toast('Press Ctrl+C to copy the selected code', 'warn', 'help'); }
     };
     const copyBtn = h('button', { type: 'button', class: 'btn primary', onclick: doCopy }, iconEl('copy', 17), 'Copy script');
+    // Studio file: a .rbxmx you drag into Explorer. The Artifact viewer blocks plain downloads, so it goes through the `downloads` capability as a .zip.
+    const studioBtn = h('button', { type: 'button', class: 'btn', title: 'A file you drag into Roblox Studio, no copy and paste', onclick: async () => {
+      try {
+        const xml = SF.rbxmx(state.cfg), fn = SF.rbxmxFileName(state.cfg);
+        if (ENV.canDownload) { downloadText(fn, xml, 'application/xml'); toast('Saved. Drag it into Studio.', 'good', 'check'); return; }
+        const dl = await claude.use('downloads');
+        if (!dl) { toast('Saving files is not available here. Use Copy script.', 'warn', 'help'); return; }
+        await dl.save({ filename: fn.replace(/\.rbxmx$/, '') + '.zip', data: SF.zip([{ name: fn, text: xml }]) });
+        toast('Saved. Unzip it, then drag the file into Studio.', 'good', 'check');
+      } catch (err) { if (!err || err.code !== 'declined') toast('Could not save the file. Use Copy script.', 'warn', 'help'); }
+    } }, iconEl('download', 17), ENV.canDownload ? 'Studio file (.rbxmx)' : 'Studio file (.zip)');
     const dlBtn = ENV.canDownload ? h('button', { type: 'button', class: 'btn', onclick: () => {
       const gen = lastGen || SF.generate(state.cfg, state.mode);
       downloadText((state.cfg.name.replace(/[^A-Za-z0-9]+/g, '_') || 'Sword') + (state.mode === 'script' ? '.server.lua' : '_builder.lua'), gen.code);
@@ -957,6 +968,7 @@
         h('div', { class: 'sheet-side' },
           h('div', { class: 'eyebrow', style: { marginBottom: '8px' } }, 'How to install'),
           modeSeg, modeNote, stepsEl,
+          h('p', { class: 'hint-text' }, h('b', {}, 'No copy and paste: '), 'press ', h('b', {}, 'Studio file'), ', then drag it onto ServerScriptService in the Explorer (or right-click it > Insert from File). It is the same sword as the In a Script option.'),
           h('details', { class: 'fold', open: true }, h('summary', {}, 'What is in this sword'), h('ul', { class: 'summary-list', id: 'export-summary' })),
           h('details', { class: 'fold' }, h('summary', {}, 'Something is not working?'),
             h('ul', {},
@@ -967,7 +979,7 @@
             h('p', { class: 'hint-text' }, 'Turn this on to flip every wedge piece. It only matters if the pointed tip or edges look inside-out in Studio.'))
         ),
         h('div', { class: 'sheet-main' },
-          h('div', { class: 'code-bar' }, copyBtn, dlBtn, h('span', { class: 'grow' }), h('span', { class: 'code-meta' })),
+          h('div', { class: 'code-bar' }, copyBtn, studioBtn, dlBtn, h('span', { class: 'grow' }), h('span', { class: 'code-meta' })),
           h('div', { class: 'code-wrap', tabindex: '0', 'aria-label': 'Generated Luau script' }, h('pre', { class: 'gut', 'aria-hidden': 'true' }), h('pre', { class: 'code' }))
         )
       )

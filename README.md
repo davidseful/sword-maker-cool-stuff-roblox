@@ -31,6 +31,8 @@ Press **Get script**. There are two ways to install it. Both give you the same s
 
 The script builds the sword and gives a fresh copy to every player each time they spawn.
 
+**Or skip copy and paste:** press **Studio file** in the same dialog. You get a `.rbxmx` model file (a `.zip` containing it, when you use the in-Claude Artifact). Drag the file onto **ServerScriptService** in the Explorer, or right-click it > **Insert from File...**, then press Play. It is the same sword as option 1.
+
 **2. Command Bar (builds a real Tool you can edit)**
 
 1. In Studio choose View > Command Bar.
@@ -118,6 +120,7 @@ The generated script is data plus a small engine: `CONFIG` describes the parts a
 | `js/model.js` | blade / guard / grip / pommel geometry and effect resolution |
 | `js/engine.js` | the Luau code blocks that end up in every script |
 | `js/luau.js` | assembles and serializes the final script (two install modes) |
+| `js/export.js` | the Studio file (`.rbxmx`) and a tiny zip writer |
 | `js/presets.js` | the premade swords |
 | `js/gl.js`, `js/preview.js` | the WebGL renderer and the preview scene |
 | `js/icons.js`, `js/app.js` | icons and the user interface |

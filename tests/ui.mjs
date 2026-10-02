@@ -142,6 +142,12 @@ async function openPage(viewport, extra, init) {
   const clip = await page.evaluate(() => navigator.clipboard.readText());
   check(clip.includes('local STATS') && clip.length > 5000, 'Copy script puts the code on the clipboard');
   check(await page.locator('.toast').count() > 0, 'a toast confirms the copy');
+  {
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#export-dlg button:has-text("Studio file")')]);
+    check(/\.rbxmx$/.test(dl.suggestedFilename()), 'Studio file downloads a .rbxmx: ' + dl.suggestedFilename());
+    const body = fs.readFileSync(await dl.path(), 'utf8');
+    check(body.startsWith('<roblox') && body.includes('class="Script"') && body.includes('setupCombat'), 'the .rbxmx holds the sword Script');
+  }
   await page.keyboard.press('Escape');
 
   // a sword with no powers: the export summary lists three facts, not a stray "null"
@@ -226,6 +232,7 @@ async function openPage(viewport, extra, init) {
   eq(await page.locator('#export-dlg button:has-text("Download")').count(), 0, 'artifact mode: no download button in the export dialog');
   const copyOk = await page.locator('#export-dlg .code-bar .btn.primary').count();
   check(copyOk === 1, 'artifact mode: the Copy script button is there');
+  eq(await page.locator('#export-dlg button:has-text("Studio file (.zip)")').count(), 1, 'artifact mode: Studio file is offered as a .zip');
   const leakedExport = await strays(page);
   check(leakedExport.length === 0, 'artifact mode: no leaked text in the export dialog: ' + leakedExport.join(' | '));
   await page.keyboard.press('Escape');
