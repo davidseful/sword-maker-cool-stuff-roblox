@@ -1,0 +1,16 @@
+{
+  "name": "sword-forge",
+  "version": "1.0.0",
+  "description": "Browser-based Roblox sword maker: design a sword, get a ready-to-paste Luau script.",
+  "private": true,
+  "scripts": {
+    "test": "node tools/build.mjs --check && node tests/run.mjs",
+    "test:ui": "node tests/ui.mjs",
+    "test:all": "npm test && npm run test:ui",
+    "build": "node tools/build.mjs"
+  },
+  "devDependencies": {
+    "@luau-rs/luau": "^0.739.0",
+    "playwright": "1.56.1"
+  }
+}
