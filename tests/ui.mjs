@@ -18,9 +18,23 @@ const eq = (a, b, msg) => check(a === b, `${msg} (got ${JSON.stringify(a)}, want
 
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--use-gl=angle'] });
 
-async function openPage(viewport, extra) {
+// Text nodes that are really a leaked JS value ("null", "undefined", "false", "NaN", "[object Object]").
+const strays = (page) => page.evaluate(() => {
+  const bad = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const p = n.parentElement;
+    if (!p || p.closest('script, style, textarea, .code')) continue;
+    const t = n.nodeValue;
+    if (/^\s*(null|undefined|false|NaN)\s*$/.test(t) || /\b(undefined|NaN)\b|\[object /.test(t)) bad.push(`${p.tagName.toLowerCase()}.${p.className}: "${t.trim().slice(0, 40)}"`);
+  }
+  return bad;
+});
+
+async function openPage(viewport, extra, init) {
   const ctx = await browser.newContext(Object.assign({ viewport, colorScheme: 'dark', permissions: ['clipboard-read', 'clipboard-write'] }, extra || {}));
   const page = await ctx.newPage();
+  if (init) await page.addInitScript(init);
   const problems = [];
   page.on('console', (m) => { if ((m.type() === 'error' || m.type() === 'warning') && !/ERR_CERT|fonts\.g|net::ERR/.test(m.text())) problems.push(m.type() + ': ' + m.text()); });
   page.on('pageerror', (e) => problems.push('PAGEERROR: ' + e.message));
@@ -53,6 +67,12 @@ async function openPage(viewport, extra) {
   for (const t of ['hilt', 'fx', 'powers', 'blade']) {
     await page.click('#tab-' + t);
     check((await page.locator('#panel .field, #panel .layer, #panel .addbtn').count()) > 3, `the ${t} tab shows controls`);
+    const leaked = await strays(page);
+    check(leaked.length === 0, `no leaked null/undefined text on the ${t} tab: ${leaked.join(' | ')}`);
+  }
+  {
+    const leaked = await strays(page);
+    check(leaked.length === 0, `no leaked null/undefined text on the page header and stats: ${leaked.join(' | ')}`);
   }
 
   // slider -> model
@@ -124,6 +144,23 @@ async function openPage(viewport, extra) {
   check(await page.locator('.toast').count() > 0, 'a toast confirms the copy');
   await page.keyboard.press('Escape');
 
+  // a sword with no powers: the export summary lists three facts, not a stray "null"
+  {
+    const plainId = await page.evaluate(() => { const p = SF.PRESETS.find((x) => SF.describe(x.cfg).powers.length === 0); return p && p.id; });
+    check(!!plainId, 'there is a premade sword without powers to test with');
+    if (plainId) {
+      await page.click(`.card[data-id="${plainId}"]`);
+      await page.click('.cta-desktop');
+      await page.waitForSelector('#export-dlg[open]');
+      eq(await page.locator('#export-summary li').count(), 3, 'the export summary lists three facts for a sword without powers');
+      const summary = await page.$eval('#export-summary', (e) => e.textContent);
+      check(!/null|undefined|false/.test(summary), 'the export summary has no leaked null: ' + summary);
+      const leaked = await strays(page);
+      check(leaked.length === 0, 'no leaked null/undefined text in the export dialog: ' + leaked.join(' | '));
+      await page.keyboard.press('Escape');
+    }
+  }
+
   // library
   await page.click('button:has-text("My swords")');
   await page.waitForSelector('#library-dlg[open]');
@@ -174,6 +211,32 @@ async function openPage(viewport, extra) {
   eq(dw.s, dw.c, 'phone: the export dialog does not widen the page');
   if (shots) await page.screenshot({ path: path.join(outDir, 'ui-phone.png') });
   check(problems.length === 0, 'phone: no console errors: ' + problems.join(' | '));
+  await ctx.close();
+}
+
+/* ------------------------------------------- Artifact viewer mode (no downloads, no #links) */
+{
+  const { ctx, page, problems } = await openPage({ width: 1366, height: 820 }, {}, () => { globalThis.SF_ARTIFACT = true; });
+  eq(await page.locator('#theme-btn').count(), 0, 'artifact mode: the theme toggle is left out (the viewer has its own)');
+  const leakedTop = await strays(page);
+  check(leakedTop.length === 0, 'artifact mode: no leaked null/undefined text in the header: ' + leakedTop.join(' | '));
+  eq(await page.locator('#top-actions .btn').count(), 5, 'artifact mode: header has undo, redo, Surprise me, My swords and Get script (no theme button)');
+  await page.click('.cta-desktop');
+  await page.waitForSelector('#export-dlg[open]');
+  eq(await page.locator('#export-dlg button:has-text("Download")').count(), 0, 'artifact mode: no download button in the export dialog');
+  const copyOk = await page.locator('#export-dlg .code-bar .btn.primary').count();
+  check(copyOk === 1, 'artifact mode: the Copy script button is there');
+  const leakedExport = await strays(page);
+  check(leakedExport.length === 0, 'artifact mode: no leaked text in the export dialog: ' + leakedExport.join(' | '));
+  await page.keyboard.press('Escape');
+  await page.click('button:has-text("My swords")');
+  await page.waitForSelector('#library-dlg[open]');
+  eq(await page.locator('#library-dlg button:has-text("share link")').count(), 0, 'artifact mode: no share-link button (the viewer blocks #links)');
+  eq(await page.locator('#library-dlg button:has-text("Download")').count(), 0, 'artifact mode: no download-file button');
+  check(await page.locator('#library-dlg button:has-text("Copy sword code")').count() === 1, 'artifact mode: sword codes can still be copied');
+  const leakedLib = await strays(page);
+  check(leakedLib.length === 0, 'artifact mode: no leaked text in the library: ' + leakedLib.join(' | '));
+  check(problems.length === 0, 'artifact mode: no console errors: ' + problems.join(' | '));
   await ctx.close();
 }
 

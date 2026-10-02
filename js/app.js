@@ -32,6 +32,8 @@
     }
     return el;
   }
+  // Element.append() turns null / false into the visible text "null" / "false"; this skips them the way h() does.
+  const put = (el, ...kids) => { kids.forEach((c) => { if (c != null && c !== false) el.append(c); }); return el; };
   const $ = (s, r) => (r || document).querySelector(s);
   const ico = (name, size) => SF.icon(name, size);
   const iconEl = (name, size) => { const s = h('span', { html: ico(name, size), style: { display: 'inline-flex' } }); return s.firstChild; };
@@ -592,7 +594,7 @@
       card.classList.toggle('off', !l.on);
       sub.textContent = layerSummary(l);
     });
-    card.append(head, body, spec.blurb ? h('div', { hidden: true }, spec.blurb) : null);
+    put(card, head, body, spec.blurb ? h('div', { hidden: true }, spec.blurb) : null);
     return card;
   }
 
@@ -735,7 +737,7 @@
     const top = $('#top-actions');
     undoBtn = h('button', { type: 'button', class: 'btn icon ghost', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', html: ico('undo'), onclick: undo });
     redoBtn = h('button', { type: 'button', class: 'btn icon ghost', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo', html: ico('redo'), onclick: redo });
-    top.append(
+    put(top,
       undoBtn, redoBtn,
       h('button', { type: 'button', class: 'btn hide-s', onclick: randomize, title: 'Roll a brand new random sword (R)' }, iconEl('dice', 17), 'Surprise me'),
       h('button', { type: 'button', class: 'btn hide-s', onclick: openLibrary, title: 'Save, load and share swords' }, iconEl('save', 17), 'My swords'),
@@ -891,7 +893,7 @@
     if (!box) return;
     const d = SF.describe(state.cfg);
     box.innerHTML = '';
-    box.append(
+    put(box,
       h('li', {}, h('b', {}, d.parts + ' parts'), ' welded into one Tool, ', d.length.toFixed(1), ' studs long'),
       h('li', {}, h('b', {}, d.effects + ' effect' + (d.effects === 1 ? '' : 's')), ' (glow, particles, trails...)'),
       h('li', {}, h('b', {}, state.cfg.combat.damage + ' damage'), ' per hit, ', state.cfg.combat.cooldown + 's cooldown'),
