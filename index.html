@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sword Forge</title>
+<meta name="description" content="Design a Roblox sword in 3D, then copy the finished Luau script into Studio.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700;800&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app" id="app">
+
+  <header class="top">
+    <div class="brand">
+      <div class="brand-mark" id="brand-mark"></div>
+      <div class="brand-name">Sword Forge<small>ROBLOX SWORD MAKER</small></div>
+    </div>
+    <div class="name-field"><input id="sword-name" type="text" maxlength="32" spellcheck="false" autocomplete="off" aria-label="Sword name" placeholder="NAME YOUR SWORD"></div>
+    <div class="top-actions" id="top-actions"></div>
+  </header>
+
+  <aside class="gallery plate" id="gallery" aria-label="Premade swords">
+    <div class="gallery-scroll">
+      <h2 class="section-title">Premade swords</h2>
+      <div class="cards" id="cards"></div>
+    </div>
+  </aside>
+
+  <main class="stage-col">
+    <section class="stage" id="stage" aria-label="3D preview">
+      <div class="stage-ui tl" id="stage-tl"></div>
+      <div class="stage-ui tr" id="stage-tr"></div>
+      <div class="hint">Drag to turn &middot; scroll to zoom &middot; click the sword to swing</div>
+      <div class="stage-ui bc" id="stage-bc"></div>
+      <div class="nogl" id="nogl"><div><b>The 3D preview needs WebGL</b><p>Your browser has it switched off, so there is no live picture. Everything else still works: pick a sword, change it, and copy the script.</p></div></div>
+    </section>
+    <div class="statbar plate" id="statbar"></div>
+  </main>
+
+  <aside class="inspector plate" id="inspector" aria-label="Sword settings">
+    <div class="palettes">
+      <div class="eyebrow"><span>Color theme</span><span id="pal-note"></span></div>
+      <div class="pal-row" id="pal-row"></div>
+    </div>
+    <div class="tabs" id="tabs" role="tablist"></div>
+    <div id="panels"></div>
+  </aside>
+
+  <div class="cta-mobile" id="cta-mobile"></div>
+</div>
+
+<dialog class="sheet" id="export-dlg" aria-labelledby="export-title"></dialog>
+<dialog class="sheet" id="library-dlg" aria-labelledby="library-title"></dialog>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="js/data.js"></script>
+<script src="js/model.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/luau.js"></script>
+<script src="js/presets.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/gl.js"></script>
+<script src="js/preview.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
