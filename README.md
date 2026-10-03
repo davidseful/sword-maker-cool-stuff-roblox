@@ -45,7 +45,13 @@ The script builds the sword and gives a fresh copy to every player each time the
 
 Every premade sword comes with moves that suit it (a katana crouches into a draw cut, a greatsword smashes, a saber twirls). They are made of keyframes that turn the character's arms, wrist, torso, head and legs, so they work on **R6 and R15** bodies and replicate to everyone.
 
-It is all inside the sword's own script: while the sword is held, the script turns the wielder's joints (`Motor6D.C0`) and the sword's grip every frame, and puts them back when the sword is put away. There is no second script to install, so the animations **go wherever the Tool goes**: paste the script, run the Command Bar builder, or drag in the Studio file, and the sword animates. (They are driven from the server, so they show for every player, but they are a little less silky than client-side animation on a laggy connection.)
+The moves are played by a small **LocalScript named `SwordForgeAnimator` that sits inside the Tool**. It runs on the machine of whoever holds the sword and turns their character's joints (`Motor6D.C0`) and the sword's grip every frame, which is the standard, smooth way to animate a character, and it travels with the Tool.
+
+* **Studio file:** the Script carries the LocalScript and puts a copy inside every sword it hands out.
+* **Command Bar:** the Tool it builds already contains the LocalScript, so you can drag that Tool anywhere.
+* **In a Script (copy and paste):** a pasted Script can't create a LocalScript by itself. Add a `LocalScript` named `SwordForgeAnimator` *inside* your Script and paste the **Animator** tab into it. Without it the sword still animates, but from the server, which is rougher.
+
+The animator only moves the person holding the sword (that is how client-side animation works), so other players see the sword swing and the effects but not the arm movement.
 
 In the **Moves** tab you choose the combo (add, remove, reorder swings, preview each one), a **stance** while holding the sword, an **equip flourish** and the speed. Each hit of the combo plays the next move; the last one is the finisher. The moves are plain keyframe data in the `ANIMATION` table at the top of the script, so you can also edit them by hand.
 

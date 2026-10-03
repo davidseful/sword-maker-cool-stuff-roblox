@@ -1074,7 +1074,9 @@ ${A ? `		tool:SetAttribute("SFIdle", ANIMATION.idle)
 		if ANIMATION.equip ~= "" then
 			playMove(ANIMATION.equip)
 		end
-		startDriver()
+		if not tool:FindFirstChild("SwordForgeAnimator") then
+			startDriver() -- no LocalScript animator in the Tool: move the wielder from here
+		end
 ` : ''}		local token = session
 		startLoops(tool, function()
 			return equipped and session == token and tool.Parent ~= nil
@@ -1374,9 +1376,55 @@ ${A.swings ? `	local animStep = 0
 	end
 `;
 
+  /* The LocalScript that goes INSIDE the Tool. It runs on the wielder's own machine (smooth, and the standard way
+     to animate a character). The shared pose math is E.animMath; the moves are embedded by luau.js. */
+  E.animClient = String.raw`
+
+-- ---- the client loop: animates the player who holds this sword ----
+local RunService = game:GetService("RunService")
+local tool = script.Parent
+local current = nil
+
+local function stop()
+	if current then
+		restore(current.rig)
+		current = nil
+	end
+end
+
+local reported = false
+RunService.RenderStepped:Connect(function(dt)
+	local character = tool.Parent
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then
+		stop()
+		return
+	end
+	if not current or current.character ~= character then
+		stop()
+		current = newDriver(character)
+		current.character = character
+		if not reported then
+			reported = true
+			local joints = 0
+			for _ in pairs(current.rig.joints) do
+				joints += 1
+			end
+			print("[SwordForgeAnimator] animating " .. character.Name .. " (" .. (current.rig.r6 and "R6" or "R15") .. ", " .. joints .. " joints found)")
+		end
+	end
+	local ok, err = pcall(stepDriver, current, character, tool, dt)
+	if not ok then
+		warn("[SwordForgeAnimator] " .. tostring(err))
+		stop()
+		script.Disabled = true
+	end
+end)
+`;
+
   /* ----------------------------------------------------------------- delivery (runtime mode) */
-  E.delivery = String.raw`-- gives every player a fresh copy of the sword each time they spawn
-local function giveSword(player)
+  E.delivery = (A) => String.raw`-- gives every player a fresh copy of the sword each time they spawn
+${A ? E.animatorLookup : ''}local function giveSword(player)
 	local backpack = player:FindFirstChildOfClass("Backpack") or player:WaitForChild("Backpack", 10)
 	if not backpack then
 		return
@@ -1386,7 +1434,10 @@ local function giveSword(player)
 		return
 	end
 	local tool = buildSword()
-	setupCombat(tool)
+${A ? `	if animatorTemplate then
+		animatorTemplate:Clone().Parent = tool -- the animator travels inside the Tool
+	end
+` : ''}	setupCombat(tool)
 	tool.Parent = backpack
 end
 
@@ -1406,7 +1457,16 @@ for _, player in ipairs(Players:GetPlayers()) do
 end`;
 
   /* ----------------------------------------------------------------- delivery (command bar mode) */
-  E.install = String.raw`-- build the sword and drop it into StarterPack
+  E.animatorLookup = String.raw`-- the animator: a LocalScript named SwordForgeAnimator inside THIS Script (the Studio file has it). Every sword gets a copy,
+-- which makes the animations smooth. Without it the script moves the character itself, which works but looks rougher.
+local animatorTemplate = script and script:FindFirstChild("SwordForgeAnimator")
+if not animatorTemplate then
+	print("[SwordForge] No SwordForgeAnimator LocalScript inside this Script: animating from the server instead (rougher). The 'Studio file' download includes it.")
+end
+
+`;
+
+  E.install = (A) => String.raw`-- build the sword and drop it into StarterPack
 local StarterPack = game:GetService("StarterPack")
 local old = StarterPack:FindFirstChild(CONFIG.Name)
 if old then
@@ -1418,7 +1478,11 @@ local combatScript = Instance.new("Script")
 combatScript.Name = "SwordScript"
 combatScript.Source = COMBAT_SOURCE
 combatScript.Parent = tool
-tool.Parent = StarterPack
+${A ? `local animator = Instance.new("LocalScript")
+animator.Name = "SwordForgeAnimator"
+animator.Source = ANIMATOR_SOURCE
+animator.Parent = tool -- the animations ride inside the Tool, so they go wherever it goes
+` : ''}tool.Parent = StarterPack
 
 pcall(function()
 	game:GetService("Selection"):Set({ tool })

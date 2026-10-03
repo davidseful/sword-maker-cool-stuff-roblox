@@ -70,6 +70,21 @@ else
 	end
 end
 
+------------------------------------------------------------------ animations: the LocalScript inside the Tool
+local function startAnimator(t)
+	local animator = t:FindFirstChild("SwordForgeAnimator")
+	check((animator ~= nil) == (ANIM ~= nil and EXPECT.clientAnimator), "the Tool carries SwordForgeAnimator exactly when expected")
+	if animator then
+		check(animator:IsA("LocalScript") and #animator.Source > 2000, "the animator is a LocalScript with its source")
+		-- what Roblox does for a LocalScript in a Tool that is in your Backpack: it runs
+		__runSource(animator.Source, animator)
+	end
+end
+if ANIM then
+	startAnimator(tool)
+	Mock.run(0.1)
+end
+
 ------------------------------------------------------------------ structure
 local handle = tool:FindFirstChild("Handle")
 local hitbox = tool:FindFirstChild("Hitbox")
@@ -459,6 +474,7 @@ if ANIM then
 	if not tool15 then
 		return
 	end
+	startAnimator(tool15)
 	tool15.Parent = character15
 	Mock.run(0.2)
 

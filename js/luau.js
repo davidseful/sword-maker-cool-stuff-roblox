@@ -214,6 +214,21 @@
     return blocks.join('\n\n');
   }
 
+  /* the LocalScript that sits inside the Tool: header + the moves + the shared pose math + a client loop */
+  function animatorSource(d) {
+    const e = E();
+    return [
+      '-- SwordForgeAnimator (LocalScript) - made with Sword Forge',
+      '-- Lives inside the sword Tool. Runs on the machine of whoever holds the sword and plays the swing / stance / flourish.',
+      '',
+      'local ANIMATION = ' + ser(animTable(d.anim), 0),
+      '',
+      e.animMath,
+      e.animClient.trimEnd(),
+      '',
+    ].join('\n');
+  }
+
   function banner_anim() {
     return '-- Animations. Each move is a few keyframes: at time t (0..1 of the move) these body parts are turned by this many degrees.\n'
       + '-- ra right arm, wr wrist, la left arm, to torso, he head, rl / ll legs, dy / dz body height / forward (studs).\n'
@@ -257,7 +272,9 @@
         '-- ENCHANT_CFG and CONFIG below, then press Play again.',
       ].concat(d.anim ? [
         '--',
-        '-- ANIMATIONS: this sword moves your character (swings, stance, flourish). It is all in this one script.',
+        '-- ANIMATIONS: this sword moves your character (swings, stance, flourish). For the smooth version, put a',
+        '--   LocalScript named  SwordForgeAnimator  INSIDE this Script and paste the animator code into it. Even easier:',
+        '--   use the "Studio file" download, which has it built in. Without it the script animates from the server (works, rougher).',
       ] : []).join('\n'));
     } else {
       out.push([
@@ -270,7 +287,7 @@
         '--      Press Play and it is in your hotbar. You can now edit its parts,',
         '--      change Attributes (damage ...) or save it to your Toolbox.',
       ].concat(d.anim ? [
-        '--   The animations live inside the sword\'s own script, so they go wherever the Tool goes.',
+        '--   The Tool also holds a LocalScript called SwordForgeAnimator: that plays the animations, and it goes wherever the Tool goes.',
       ] : []).join('\n'));
     }
 
@@ -299,7 +316,7 @@
       out.push('\n' + banner('4. COMBAT', 'Swings, damage and special powers.') + '\n');
       out.push(combat);
       out.push('\n' + banner('5. GIVE THE SWORD TO PLAYERS') + '\n');
-      out.push(e.delivery);
+      out.push(e.delivery(d.anim ? {} : null));
     } else {
       // the combat code becomes the Script that lives inside the Tool
       const chunk = [
@@ -318,13 +335,18 @@
       const eq = pickDelimiter(chunk);
       out.push('\n' + banner('4. THE SCRIPT THAT GOES INSIDE THE TOOL') + '\n');
       out.push('local COMBAT_SOURCE = [' + eq + '[\n' + chunk + ']' + eq + ']');
+      if (d.anim) {
+        const aeq = pickDelimiter(animatorSource(d));
+        out.push('\n' + banner('4b. THE ANIMATOR (a LocalScript that goes inside the Tool)') + '\n');
+        out.push('local ANIMATOR_SOURCE = [' + aeq + '[\n' + animatorSource(d) + ']' + aeq + ']');
+      }
       out.push('\n' + banner('5. BUILD IT') + '\n');
-      out.push(e.install);
+      out.push(e.install(d.anim ? {} : null));
     }
 
     const code = out.join('\n').replace(/\n{3,}/g, '\n\n') + '\n';
     return {
-      code, mode, model,
+      code, mode, model, animator: d.anim ? animatorSource(d) : null,
       lines: code.split('\n').length - 1,
       bytes: code.length,
     };

@@ -170,7 +170,13 @@ async function openPage(viewport, extra, init) {
   check(/local function setupCombat/.test(code), 'the combat code is included');
   check((await page.$eval('#export-dlg .code-meta', (e) => e.textContent)).includes('lines'), 'the size is shown');
   if (shots) await page.screenshot({ path: path.join(outDir, 'ui-export.png') });
+  check(await page.locator('#export-dlg .part-tabs').isVisible(), 'an animated sword shows the Sword Script / Animator tabs');
+  await page.click('#export-dlg .part-tabs button >> nth=1');
+  check((await page.$eval('#export-dlg .code', (el) => el.textContent)).includes('SwordForgeAnimator'), 'the Animator tab shows the LocalScript code');
+  check((await page.$eval('#export-dlg .copy-lab', (el) => el.textContent)) === 'Copy animator', 'the copy button says what it copies');
+  await page.click('#export-dlg .part-tabs button >> nth=0');
   await page.click('#export-dlg .seg button >> nth=1');
+  check(!(await page.locator('#export-dlg .part-tabs').isVisible()), 'command bar mode has one script, so no tabs');
   const code2 = await page.$eval('#export-dlg .code', (el) => el.textContent);
   check(code2.includes('COMBAT_SOURCE') && code2.includes('StarterPack'), 'command bar mode shows the builder script');
   await page.click('#export-dlg .seg button >> nth=0');
@@ -183,7 +189,7 @@ async function openPage(viewport, extra, init) {
     check(/\.rbxmx$/.test(dl.suggestedFilename()), 'Studio file downloads a .rbxmx: ' + dl.suggestedFilename());
     const body = fs.readFileSync(await dl.path(), 'utf8');
     check(body.startsWith('<roblox') && body.includes('class="Script"') && body.includes('setupCombat'), 'the .rbxmx holds the sword Script');
-    check(body.includes('local ANIMATION = ') && !body.includes('LocalScript'), 'an animated sword .rbxmx is one self-contained Script');
+    check(body.includes('class="LocalScript"') && body.includes('SwordForgeAnimator'), 'an animated sword .rbxmx carries the animator LocalScript');
   }
   await page.keyboard.press('Escape');
 

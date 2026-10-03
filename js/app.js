@@ -946,7 +946,11 @@
   /* ------------------------------------------------------------ export dialog */
   let codeTimer = 0;
   let lastGen = null;
-  const shownText = () => (lastGen || SF.generate(state.cfg, state.mode)).code;
+  let exportPart = 'sword';                       // which script the code view shows: 'sword' or 'animator'
+  const shownText = () => {
+    const gen = lastGen || SF.generate(state.cfg, state.mode);
+    return exportPart === 'animator' && gen.animator && state.mode === 'script' ? gen.animator : gen.code;
+  };
   const exportOpen = () => $('#export-dlg').open;
   function scheduleCode() { clearTimeout(codeTimer); codeTimer = setTimeout(updateCode, 140); }
 
@@ -955,6 +959,15 @@
     if (!dlg.open) return;
     const gen = SF.generate(state.cfg, state.mode);
     lastGen = gen;
+    const tabs = $('.part-tabs', dlg);
+    const hasTabs = !!gen.animator && state.mode === 'script';
+    if (tabs) {
+      tabs.hidden = !hasTabs;
+      if (!hasTabs) exportPart = 'sword';
+      [...tabs.children].forEach((b, i) => b.setAttribute('aria-pressed', String(['sword', 'animator'][i] === exportPart)));
+      const copyLab = $('.copy-lab', dlg);
+      if (copyLab) copyLab.textContent = hasTabs && exportPart === 'animator' ? 'Copy animator' : 'Copy script';
+    }
     const text = shownText();
     const pre = $('.code', dlg), gut = $('.gut', dlg);
     pre.innerHTML = highlight(text);
@@ -982,15 +995,17 @@
   function openExport() {
     const dlg = $('#export-dlg');
     dlg.innerHTML = '';
+    exportPart = 'sword';
     const stepsEl = h('ol', { class: 'steps' });
     const modeNote = h('p', { class: 'hint-text', style: { marginTop: '8px' } });
+    const animated = !!SF.animData(state.cfg.anim);
     const paintSteps = () => {
       stepsEl.innerHTML = '';
       const S = state.mode === 'script' ? [
         ['Open your game', 'Open Roblox Studio and your place. Show the Explorer (View > Explorer).'],
         ['Add a Script', 'Hover ServerScriptService, click the + and choose Script. Delete the line of code it starts with.'],
         ['Paste and press Play', 'Paste everything you copied. Press Play, then press 1 and click to swing.'],
-      ] : [
+      ].concat(animated ? [['Add the animator', 'For the animations: right-click your new Script > Insert Object > LocalScript, name it SwordForgeAnimator, then copy the Animator tab here and paste it in. Skip it and the sword still animates, just rougher. (Or use the Studio file: it has it built in.)']] : []) : [
         ['Open the Command Bar', 'In Studio choose View > Command Bar.'],
         ['Paste and press Enter', 'Paste everything you copied into the bar and press Enter.'],
         ['Find your sword', 'It appears in StarterPack. Press Play to try it, or edit its parts first.'],
@@ -1019,7 +1034,7 @@
       if (ok) toast('Copied! Now paste it into Studio.', 'good', 'copy');
       else { selectCode(); toast('Press Ctrl+C to copy the selected code', 'warn', 'help'); }
     };
-    const copyBtn = h('button', { type: 'button', class: 'btn primary', onclick: doCopy }, iconEl('copy', 17), 'Copy script');
+    const copyBtn = h('button', { type: 'button', class: 'btn primary', onclick: doCopy }, iconEl('copy', 17), h('span', { class: 'copy-lab' }, 'Copy script'));
     // Studio file: a .rbxmx you drag into Explorer. The Artifact viewer blocks plain downloads, so it goes through the `downloads` capability as a .zip.
     const studioBtn = h('button', { type: 'button', class: 'btn', title: 'A file you drag into Roblox Studio, no copy and paste', onclick: async () => {
       try {
@@ -1033,7 +1048,8 @@
     } }, iconEl('download', 17), ENV.canDownload ? 'Studio file (.rbxmx)' : 'Studio file (.zip)');
     const dlBtn = ENV.canDownload ? h('button', { type: 'button', class: 'btn', onclick: () => {
       const base = state.cfg.name.replace(/[^A-Za-z0-9]+/g, '_') || 'Sword';
-      downloadText(base + (state.mode === 'script' ? '.server.lua' : '_builder.lua'), shownText());
+      if (exportPart === 'animator' && state.mode === 'script') downloadText('SwordForgeAnimator.client.lua', shownText());
+      else downloadText(base + (state.mode === 'script' ? '.server.lua' : '_builder.lua'), shownText());
     } }, iconEl('download', 17), 'Download .lua') : null;
 
     dlg.append(
@@ -1058,6 +1074,10 @@
         ),
         h('div', { class: 'sheet-main' },
           h('div', { class: 'code-bar' }, copyBtn, studioBtn, dlBtn, h('span', { class: 'grow' }), h('span', { class: 'code-meta' })),
+          h('div', { class: 'part-row' },
+            h('div', { class: 'seg part-tabs', role: 'group', 'aria-label': 'Which script to show', hidden: true },
+              h('button', { type: 'button', 'aria-pressed': 'true', onclick: () => { exportPart = 'sword'; updateCode(); } }, 'Sword Script'),
+              h('button', { type: 'button', 'aria-pressed': 'false', onclick: () => { exportPart = 'animator'; updateCode(); } }, 'Animator (LocalScript)'))),
           h('div', { class: 'code-wrap', tabindex: '0', 'aria-label': 'Generated Luau script' }, h('pre', { class: 'gut', 'aria-hidden': 'true' }), h('pre', { class: 'code' }))
         )
       )
