@@ -766,7 +766,7 @@ end`;
 
   /* ----------------------------------------------------------------- combat core */
   E.combatA = (A) => String.raw`-- everything one sword needs to fight; call setupCombat(tool) once per Tool
-${A ? E.animFlag + '\n\n' : ''}local function setupCombat(tool)
+local function setupCombat(tool)
 	local handle = tool:WaitForChild("Handle")
 	local hitbox = tool:WaitForChild("Hitbox")
 	local baseGrip = tool.Grip
@@ -908,7 +908,7 @@ ${A ? E.animServer(A) : ''}
 		end
 
 ${A && A.swings ? `		-- with the animator, the move decides the timing: the blade is live while the sword is actually moving
-		local custom = animatorReady and moveId ~= nil
+		local custom = moveId ~= nil
 		if custom then
 			local total = playMove(moveId)
 			local hit = ANIMATION.moves[moveId].hit
@@ -1049,7 +1049,7 @@ ${A && A.swings ? `		local step
 		session += 1
 		activeSwings = 0
 		setEnabled(swingFx, false)
-		tool.Grip = baseGrip${A ? '\n\t\ttool:SetAttribute("SFIdle", "")\n\t\ttool:SetAttribute("SFPlay", "")' : ''}
+		tool.Grip = baseGrip${A ? '\n\t\tstopDriver()\n\t\ttool:SetAttribute("SFIdle", "")\n\t\ttool:SetAttribute("SFPlay", "")' : ''}
 		if diedConnection then
 			diedConnection:Disconnect()
 			diedConnection = nil
@@ -1070,12 +1070,11 @@ ${A && A.swings ? `		local step
 		tool.Grip = baseGrip
 		playSound("EquipSound")
 		emit(equipFx)
-${A ? `		if animatorReady then
-			tool:SetAttribute("SFIdle", ANIMATION.idle)
-			if ANIMATION.equip ~= "" then
-				playMove(ANIMATION.equip)
-			end
+${A ? `		tool:SetAttribute("SFIdle", ANIMATION.idle)
+		if ANIMATION.equip ~= "" then
+			playMove(ANIMATION.equip)
 		end
+		startDriver()
 ` : ''}		local token = session
 		startLoops(tool, function()
 			return equipped and session == token and tool.Parent ~= nil
@@ -1088,19 +1087,9 @@ end`;
 
   /* ----------------------------------------------------------------- animations */
   // the LocalScript that moves the character (shared by every sword that uses animations)
-  E.animator = String.raw`-- SwordForgeAnimator (LocalScript) - made with Sword Forge
--- Plays the swing, idle and equip moves of Sword Forge swords on every character you can see.
--- It only turns the character's joints (Motor6D.C0) and the sword's grip on THIS machine, every frame,
--- so the motion is smooth for everybody. The server just says which move started and when.
-if _G.SwordForgeAnimator then
-	return -- another copy is already running
-end
-_G.SwordForgeAnimator = true
-
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local HttpService = game:GetService("HttpService")
-
+  E.animMath = String.raw`-- Animations: the moves in ANIMATION are keyframes. While the sword is held, this code turns the wielder's joints
+-- (Motor6D.C0, R6 and R15) and the sword's grip every frame. Everything lives in this script, so the animations
+-- come with the sword wherever you put it.
 local CHANNELS = { "ra", "wr", "la", "to", "he", "rl", "ll" } -- right arm, wrist, left arm, torso, head, right leg, left leg
 local rad = math.rad
 
@@ -1183,7 +1172,7 @@ local function blendPose(a, b, w, out)
 	out.dz = a.dz + (b.dz - a.dz) * w
 end
 
--- ---------------------------------------------------------------- the rig (R6 and R15)
+-- the rig (R6 and R15)
 local JOINTS = {
 	root = { "RootJoint", "Root" },
 	waist = { "Waist" },
@@ -1272,22 +1261,15 @@ local function restore(rig)
 	rig.grip = nil
 end
 
--- ---------------------------------------------------------------- one character
-local states = setmetatable({}, { __mode = "k" })
-local zero = newPose()
-local scratch = newPose()
+-- ---- driving one wielder: blends between the move that is playing and the idle stance ----
+local zeroPose = newPose()
+local scratchPose = newPose()
 
-local function stateOf(character)
-	local s = states[character]
-	if not s then
-		s = {
-			rig = findRig(character), pose = newPose(), from = newPose(),
-			blendTime = 1, blendLength = 0.1, playKey = "", move = nil, movesKey = "", moves = {},
-			start = 0, speed = 1, active = false,
-		}
-		states[character] = s
-	end
-	return s
+local function newDriver(character)
+	return {
+		rig = findRig(character), pose = newPose(), from = newPose(), blendTime = 1, blendLength = 0.1,
+		playKey = "", move = nil, start = 0, speed = 1,
+	}
 end
 
 local function startBlend(s, length)
@@ -1296,34 +1278,13 @@ local function startBlend(s, length)
 	s.blendLength = length
 end
 
-local function update(character, tool, dt)
-	local s = stateOf(character)
-	if not tool then
-		if s.active then
-			restore(s.rig)
-			s.active = false
-			s.move = nil
-			s.playKey = ""
-			copyPose(zero, s.pose)
-		end
-		return
-	end
-
-	local raw = tool:GetAttribute("SFMoves")
-	if raw ~= s.movesKey then
-		s.movesKey = raw
-		local ok, decoded = pcall(HttpService.JSONDecode, HttpService, raw)
-		s.moves = ok and decoded or {}
-		for _, move in pairs(s.moves) do
-			prepare(move)
-		end
-	end
-
+-- one frame: reads what the sword says is playing (attributes SFPlay / SFIdle) and turns the joints
+local function stepDriver(s, character, tool, dt)
 	local play = tool:GetAttribute("SFPlay") or ""
 	if play ~= s.playKey then
 		s.playKey = play
 		local id, start, speed = string.match(play, "^([^|]*)|([^|]*)|([^|]*)")
-		local move = id and s.moves[id]
+		local move = id and ANIMATION.moves[id]
 		if move then
 			startBlend(s, move.hit and 0.08 or 0.12)
 			s.move, s.start, s.speed = move, tonumber(start) or 0, tonumber(speed) or 1
@@ -1332,7 +1293,7 @@ local function update(character, tool, dt)
 		end
 	end
 
-	local target = scratch
+	local target = scratchPose
 	local found = false
 	if s.move then
 		local u = (workspace:GetServerTimeNow() - s.start) * s.speed / s.move.dur
@@ -1345,11 +1306,11 @@ local function update(character, tool, dt)
 		end
 	end
 	if not found then
-		local idle = s.moves[tool:GetAttribute("SFIdle") or ""]
+		local idle = ANIMATION.moves[tool:GetAttribute("SFIdle") or ""]
 		if idle then
 			poseAt(idle, (os.clock() / idle.dur) % 1, target)
 		else
-			copyPose(zero, target)
+			copyPose(zeroPose, target)
 		end
 	end
 
@@ -1360,39 +1321,13 @@ local function update(character, tool, dt)
 	else
 		copyPose(target, s.pose)
 	end
-
-	s.active = true
 	applyPose(s.rig, s.pose)
 	applyGrip(s.rig, character, s.pose)
 end
 
-local warned = false
-RunService.RenderStepped:Connect(function(dt)
-	for _, player in ipairs(Players:GetPlayers()) do
-		local character = player.Character
-		if character then
-			local tool = character:FindFirstChildOfClass("Tool")
-			if tool and tool:GetAttribute("SFMoves") == nil then
-				tool = nil -- a sword that does not use animations
-			end
-			local humanoid = character:FindFirstChildOfClass("Humanoid")
-			if humanoid and humanoid.Health <= 0 then
-				tool = nil
-			end
-			local ok, err = pcall(update, character, tool, dt)
-			if not ok and not warned then
-				warned = true
-				warn("[SwordForgeAnimator] " .. tostring(err))
-			end
-		end
-	end
-end)
-`;
-
-  // set by the delivery code once the animator LocalScript is known to exist
-  E.animFlag = String.raw`-- animations: the server only says which move starts and when; the SwordForgeAnimator LocalScript
--- (see the bottom of this script) turns the joints on every screen. No animator = Roblox's normal swing.
-local animatorReady = false`;
+for _, move in pairs(ANIMATION.moves) do
+	prepare(move)
+end`;
 
   // inside setupCombat
   E.animServer = (A) => String.raw`
@@ -1401,11 +1336,33 @@ local animatorReady = false`;
 	local moveCounter = 0
 ${A.swings ? `	local animStep = 0
 	local comboLength = math.max(#ANIMATION.swings, 3)
-` : ''}	pcall(function()
-		tool:SetAttribute("SFMoves", game:GetService("HttpService"):JSONEncode(ANIMATION.moves))
-	end)
+` : ''}
+	-- turns the wielder's joints while the sword is held
+	local driverState, driverConnection
+	local function stopDriver()
+		if driverConnection then
+			driverConnection:Disconnect()
+			driverConnection = nil
+		end
+		if driverState then
+			restore(driverState.rig)
+			driverState = nil
+		end
+	end
+	local function startDriver()
+		stopDriver()
+		local state = newDriver(character)
+		driverState = state
+		driverConnection = RunService.Heartbeat:Connect(function(dt)
+			local ok, err = pcall(stepDriver, state, character, tool, dt)
+			if not ok then
+				warn("[SwordForge] animation stopped: " .. tostring(err))
+				stopDriver()
+			end
+		end)
+	end
 
-	-- starts a move on every screen and returns how long it lasts (seconds)
+	-- starts a move and returns how long it lasts (seconds)
 	local function playMove(id)
 		local data = ANIMATION.moves[id]
 		if not data then
@@ -1416,47 +1373,6 @@ ${A.swings ? `	local animStep = 0
 		return data.dur / ANIMATION.speed
 	end
 `;
-
-  // command bar mode: the animator goes to StarterPlayerScripts so every player runs it
-  E.installAnimator = String.raw`-- the animator plays the moves on every screen
-local starterScripts = game:GetService("StarterPlayer"):FindFirstChild("StarterPlayerScripts")
-if starterScripts then
-	local oldAnimator = starterScripts:FindFirstChild("SwordForgeAnimator")
-	if oldAnimator then
-		oldAnimator:Destroy()
-	end
-	local animator = Instance.new("LocalScript")
-	animator.Name = "SwordForgeAnimator"
-	animator.Source = ANIMATOR_SOURCE
-	animator.Parent = starterScripts
-else
-	warn("[SwordForge] Could not find StarterPlayerScripts, so the animations will not play.")
-end`;
-
-  // script mode: every player gets a copy of the LocalScript that sits inside this Script
-  E.animatorInstall = String.raw`-- the animator: a LocalScript named SwordForgeAnimator inside THIS Script. Every player gets a copy.
-local animatorTemplate = script and script:FindFirstChild("SwordForgeAnimator")
-if animatorTemplate and animatorTemplate:IsA("LocalScript") then
-	animatorReady = true
-	local function giveAnimator(player)
-		local gui = player:WaitForChild("PlayerGui", 30)
-		if gui and not gui:FindFirstChild("SwordForgeAnimator") then
-			local copy = animatorTemplate:Clone()
-			pcall(function()
-				copy.Disabled = false
-			end)
-			copy.Parent = gui
-		end
-	end
-	Players.PlayerAdded:Connect(function(player)
-		task.spawn(giveAnimator, player)
-	end)
-	for _, player in ipairs(Players:GetPlayers()) do
-		task.spawn(giveAnimator, player)
-	end
-else
-	warn("[SwordForge] This sword has animations, but there is no LocalScript named SwordForgeAnimator inside this Script yet. Until you add it, the sword uses Roblox's normal swing. (Easiest: use the 'Studio file' download, it already has it.)")
-end`;
 
   /* ----------------------------------------------------------------- delivery (runtime mode) */
   E.delivery = String.raw`-- gives every player a fresh copy of the sword each time they spawn

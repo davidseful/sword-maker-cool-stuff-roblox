@@ -653,9 +653,6 @@ details.fold ul { margin: 6px 0; padding-left: 18px; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
-/* ---- export dialog: which of the two scripts is shown */
-.part-row { padding: 8px 14px 0; }
-.part-row:has(.part-tabs[hidden]) { display: none; }
 
 /* ---- Moves tab */
 .movelist { display: grid; gap: 6px; margin: 4px 0 14px; }

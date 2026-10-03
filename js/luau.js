@@ -173,6 +173,7 @@
     SF.ENCHANT_IDS.forEach((id) => {
       if (names.includes(id)) blocks.push(e.enchants[id]);
     });
+    if (d.anim) blocks.push(e.animMath);
     blocks.push(d.needsLoops ? e.loops : e.loopsStub);
     const A = d.anim ? { swings: d.anim.swings.length > 0 } : null;
     blocks.push(e.combatA(A) + (d.wave ? e.wave : e.waveStub) + '\n' + e.combatB(A));
@@ -256,9 +257,7 @@
         '-- ENCHANT_CFG and CONFIG below, then press Play again.',
       ].concat(d.anim ? [
         '--',
-        '-- ANIMATIONS: this sword moves your character (swings, stance, flourish). That needs one more piece:',
-        '--   inside this Script, add a LocalScript named  SwordForgeAnimator  and paste the animator code into it.',
-        '--   (Skip it and the sword still works with Roblox\'s normal swing. The "Studio file" download has it built in.)',
+        '-- ANIMATIONS: this sword moves your character (swings, stance, flourish). It is all in this one script.',
       ] : []).join('\n'));
     } else {
       out.push([
@@ -271,7 +270,7 @@
         '--      Press Play and it is in your hotbar. You can now edit its parts,',
         '--      change Attributes (damage ...) or save it to your Toolbox.',
       ].concat(d.anim ? [
-        '--   It also adds a LocalScript called SwordForgeAnimator to StarterPlayerScripts: that is what plays the animations.',
+        '--   The animations live inside the sword\'s own script, so they go wherever the Tool goes.',
       ] : []).join('\n'));
     }
 
@@ -300,7 +299,6 @@
       out.push('\n' + banner('4. COMBAT', 'Swings, damage and special powers.') + '\n');
       out.push(combat);
       out.push('\n' + banner('5. GIVE THE SWORD TO PLAYERS') + '\n');
-      if (d.anim) out.push(e.animatorInstall + '\n');
       out.push(e.delivery);
     } else {
       // the combat code becomes the Script that lives inside the Tool
@@ -312,7 +310,7 @@
         '',
         pruneHelpers(e.helpers, combat),
         '',
-        d.anim ? combat.replace('local animatorReady = false', 'local animatorReady = true -- the builder also puts SwordForgeAnimator into StarterPlayerScripts') : combat,
+        combat,
         '',
         'setupCombat(script.Parent)',
         '',
@@ -320,18 +318,13 @@
       const eq = pickDelimiter(chunk);
       out.push('\n' + banner('4. THE SCRIPT THAT GOES INSIDE THE TOOL') + '\n');
       out.push('local COMBAT_SOURCE = [' + eq + '[\n' + chunk + ']' + eq + ']');
-      if (d.anim) {
-        const aeq = pickDelimiter(e.animator);
-        out.push('\n' + banner('4b. THE ANIMATOR (a LocalScript that turns the joints)') + '\n');
-        out.push('local ANIMATOR_SOURCE = [' + aeq + '[\n' + e.animator + ']' + aeq + ']');
-      }
       out.push('\n' + banner('5. BUILD IT') + '\n');
-      out.push(e.install + (d.anim ? '\n' + e.installAnimator : ''));
+      out.push(e.install);
     }
 
     const code = out.join('\n').replace(/\n{3,}/g, '\n\n') + '\n';
     return {
-      code, mode, model, animator: d.anim ? e.animator : null,
+      code, mode, model,
       lines: code.split('\n').length - 1,
       bytes: code.length,
     };

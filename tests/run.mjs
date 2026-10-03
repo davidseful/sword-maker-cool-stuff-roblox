@@ -58,16 +58,15 @@ function expectationsFor(cfgIn, mode, opts) {
   const trails = fx.filter((e) => e.kind === 'trail');
   const w = c.wave;
 
-  // animations: what the server should say, how long things take, and the exact poses the animator must reach
+  // animations: what the sword should say, how long things take, and the exact poses the driver must reach
   const data = SF.animData(cfg.anim);
-  const missing = !!(data && opts && opts.animatorMissing);
-  const custom = !!(data && data.swings.length > 0 && !missing);
+  const custom = !!(data && data.swings.length > 0);
   const timing = (id) => {
     const r = SF.resolveMove(id);
     return { windup: r.hit[0] * r.dur / data.speed, window: Math.max(0.15, (r.hit[1] - r.hit[0]) * r.dur / data.speed), total: r.dur / data.speed };
   };
   let anim = null;
-  if (data && !missing) {
+  if (data) {
     const moves = {};
     Object.keys(data.moves).forEach((id) => { moves[id] = { dur: data.moves[id].dur, keys: data.moves[id].keys.length }; });
     const samples = [];
@@ -87,7 +86,7 @@ function expectationsFor(cfgIn, mode, opts) {
   const last = custom ? timing(data.swings[(comboLength - 1) % data.swings.length]) : null;
   const maxWindup = custom ? Math.max(...data.swings.map((id) => timing(id).windup)) : 0.12;
   const timings = {
-    hasAnim: !!data, customSwings: custom, animatorMissing: missing, comboLength,
+    hasAnim: !!data, customSwings: custom, comboLength,
     hitWait: custom ? first.windup + 0.1 : 0.2,
     swingTail: custom ? Math.max(0.6, first.windup + first.window + 0.3 - (first.windup + 0.1)) : 0.6,
     finisherWait: custom ? last.windup + 0.25 : 0.25,
@@ -131,13 +130,11 @@ async function runOne(label, cfg, mode, opts) {
     if (d.severity === 'error') problems.push(`lint error (line ${line}): ${d.message}`);
     else problems.push(`lint warning ${d.code} (line ${line}): ${d.message}`);
   }
-  if (gen.animator) for (const d of lint(gen.animator)) problems.push(`lint (animator line ${d.location.begin.line + 1}) ${d.severity} ${d.code}: ${d.message}`);
   // the long-string chunk of the command-bar mode is a script of its own: lint it too
   if (mode === 'commandbar') {
     const m = gen.code.match(/local COMBAT_SOURCE = \[(=+)\[\n([\s\S]*?)\]\1\]/);
     if (!m) problems.push('could not find COMBAT_SOURCE');
     else for (const d of lint(m[2])) problems.push(`lint (COMBAT_SOURCE line ${d.location.begin.line + 1}) ${d.severity} ${d.code}: ${d.message}`);
-    if (gen.animator && !/local ANIMATOR_SOURCE = \[(=+)\[\n/.test(gen.code)) problems.push('could not find ANIMATOR_SOURCE');
   }
 
   // 2. run in a Luau VM against the Roblox mock
@@ -150,16 +147,13 @@ async function runOne(label, cfg, mode, opts) {
   try {
     lua.execute(mockSource, { name: '=mock' });
     lua.execute('Mock.setupStarter()');
-    // script mode: the generated Script has the animator LocalScript as a child, like the Studio file / the manual step
-    lua.globals.set('__animatorSource', gen.animator || '');
-    lua.globals.set('__withAnimator', !(opts && opts.animatorMissing));
-    lua.execute('script = Instance.new("Script"); if __animatorSource ~= "" and __withAnimator then local ls = Instance.new("LocalScript"); ls.Name = "SwordForgeAnimator"; ls.Source = __animatorSource; ls.Parent = script end');
     lua.execute(`
       function __runSource(src, scriptInstance)
         local fn = __loadchunk(src)
         script = scriptInstance
         task.spawn(fn)
       end
+      script = Instance.new("Script")
     `);
     const main = lua.load(gen.code, { name: '=generated' });
     lua.globals.set('__main', main);
@@ -237,7 +231,7 @@ SF.POMMEL_STYLES.forEach(([id]) => {
   cases.push({ id: 'garbage-input', cfg });
 }
 
-// animations on every kind of sword; one without animations; the animator missing (falls back to Roblox's swing)
+// animations on every kind of sword, and one without animations
 {
   const cfg = SF.clone(SF.presetById('flame').cfg);
   cfg.anim.on = false;
@@ -272,7 +266,6 @@ SF.movesOf('swing').forEach((id) => {
   cfg.anim = { on: true, speed: 1, idle: 'ready', equip: 'draw', swings: [id, id, id] };
   cases.push({ id: 'move-' + id, cfg });
 });
-cases.push({ id: 'anim-missing', cfg: SF.presetById('flame').cfg, opts: { animatorMissing: true }, scriptOnly: true });
 
 /* ------------------------------------------------------------------- fuzzing */
 // Random swords with values pushed to the edges of every slider, random effect stacks, random enchantments.

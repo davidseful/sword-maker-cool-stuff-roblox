@@ -45,11 +45,7 @@ The script builds the sword and gives a fresh copy to every player each time the
 
 Every premade sword comes with moves that suit it (a katana crouches into a draw cut, a greatsword smashes, a saber twirls). They are made of keyframes that turn the character's arms, wrist, torso, head and legs, so they work on **R6 and R15** bodies and replicate to everyone.
 
-How it works: the sword Script only says "this move started now" (a Tool attribute). A small **LocalScript called `SwordForgeAnimator`** runs on every player's machine, reads that, and turns the character's joints (`Motor6D.C0`) and the sword's grip every frame, which is why it is smooth.
-
-* **Studio file:** has the animator built in. Nothing to do.
-* **Command Bar:** the builder also puts `SwordForgeAnimator` into StarterPlayerScripts.
-* **In a Script (copy and paste):** add a `LocalScript` named `SwordForgeAnimator` *inside* your Script and paste the **Animator** tab into it. Without it, the sword still works and uses Roblox's normal swing (the Output window says so once).
+It is all inside the sword's own script: while the sword is held, the script turns the wielder's joints (`Motor6D.C0`) and the sword's grip every frame, and puts them back when the sword is put away. There is no second script to install, so the animations **go wherever the Tool goes**: paste the script, run the Command Bar builder, or drag in the Studio file, and the sword animates. (They are driven from the server, so they show for every player, but they are a little less silky than client-side animation on a laggy connection.)
 
 In the **Moves** tab you choose the combo (add, remove, reorder swings, preview each one), a **stance** while holding the sword, an **equip flourish** and the speed. Each hit of the combo plays the next move; the last one is the finisher. The moves are plain keyframe data in the `ANIMATION` table at the top of the script, so you can also edit them by hand.
 

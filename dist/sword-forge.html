@@ -662,9 +662,6 @@ details.fold ul { margin: 6px 0; padding-left: 18px; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
-/* ---- export dialog: which of the two scripts is shown */
-.part-row { padding: 8px 14px 0; }
-.part-row:has(.part-tabs[hidden]) { display: none; }
 
 /* ---- Moves tab */
 .movelist { display: grid; gap: 6px; margin: 4px 0 14px; }
@@ -3033,7 +3030,7 @@ end`;
 
   /* ----------------------------------------------------------------- combat core */
   E.combatA = (A) => String.raw`-- everything one sword needs to fight; call setupCombat(tool) once per Tool
-${A ? E.animFlag + '\n\n' : ''}local function setupCombat(tool)
+local function setupCombat(tool)
 	local handle = tool:WaitForChild("Handle")
 	local hitbox = tool:WaitForChild("Hitbox")
 	local baseGrip = tool.Grip
@@ -3175,7 +3172,7 @@ ${A ? E.animServer(A) : ''}
 		end
 
 ${A && A.swings ? `		-- with the animator, the move decides the timing: the blade is live while the sword is actually moving
-		local custom = animatorReady and moveId ~= nil
+		local custom = moveId ~= nil
 		if custom then
 			local total = playMove(moveId)
 			local hit = ANIMATION.moves[moveId].hit
@@ -3316,7 +3313,7 @@ ${A && A.swings ? `		local step
 		session += 1
 		activeSwings = 0
 		setEnabled(swingFx, false)
-		tool.Grip = baseGrip${A ? '\n\t\ttool:SetAttribute("SFIdle", "")\n\t\ttool:SetAttribute("SFPlay", "")' : ''}
+		tool.Grip = baseGrip${A ? '\n\t\tstopDriver()\n\t\ttool:SetAttribute("SFIdle", "")\n\t\ttool:SetAttribute("SFPlay", "")' : ''}
 		if diedConnection then
 			diedConnection:Disconnect()
 			diedConnection = nil
@@ -3337,12 +3334,11 @@ ${A && A.swings ? `		local step
 		tool.Grip = baseGrip
 		playSound("EquipSound")
 		emit(equipFx)
-${A ? `		if animatorReady then
-			tool:SetAttribute("SFIdle", ANIMATION.idle)
-			if ANIMATION.equip ~= "" then
-				playMove(ANIMATION.equip)
-			end
+${A ? `		tool:SetAttribute("SFIdle", ANIMATION.idle)
+		if ANIMATION.equip ~= "" then
+			playMove(ANIMATION.equip)
 		end
+		startDriver()
 ` : ''}		local token = session
 		startLoops(tool, function()
 			return equipped and session == token and tool.Parent ~= nil
@@ -3355,19 +3351,9 @@ end`;
 
   /* ----------------------------------------------------------------- animations */
   // the LocalScript that moves the character (shared by every sword that uses animations)
-  E.animator = String.raw`-- SwordForgeAnimator (LocalScript) - made with Sword Forge
--- Plays the swing, idle and equip moves of Sword Forge swords on every character you can see.
--- It only turns the character's joints (Motor6D.C0) and the sword's grip on THIS machine, every frame,
--- so the motion is smooth for everybody. The server just says which move started and when.
-if _G.SwordForgeAnimator then
-	return -- another copy is already running
-end
-_G.SwordForgeAnimator = true
-
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local HttpService = game:GetService("HttpService")
-
+  E.animMath = String.raw`-- Animations: the moves in ANIMATION are keyframes. While the sword is held, this code turns the wielder's joints
+-- (Motor6D.C0, R6 and R15) and the sword's grip every frame. Everything lives in this script, so the animations
+-- come with the sword wherever you put it.
 local CHANNELS = { "ra", "wr", "la", "to", "he", "rl", "ll" } -- right arm, wrist, left arm, torso, head, right leg, left leg
 local rad = math.rad
 
@@ -3450,7 +3436,7 @@ local function blendPose(a, b, w, out)
 	out.dz = a.dz + (b.dz - a.dz) * w
 end
 
--- ---------------------------------------------------------------- the rig (R6 and R15)
+-- the rig (R6 and R15)
 local JOINTS = {
 	root = { "RootJoint", "Root" },
 	waist = { "Waist" },
@@ -3539,22 +3525,15 @@ local function restore(rig)
 	rig.grip = nil
 end
 
--- ---------------------------------------------------------------- one character
-local states = setmetatable({}, { __mode = "k" })
-local zero = newPose()
-local scratch = newPose()
+-- ---- driving one wielder: blends between the move that is playing and the idle stance ----
+local zeroPose = newPose()
+local scratchPose = newPose()
 
-local function stateOf(character)
-	local s = states[character]
-	if not s then
-		s = {
-			rig = findRig(character), pose = newPose(), from = newPose(),
-			blendTime = 1, blendLength = 0.1, playKey = "", move = nil, movesKey = "", moves = {},
-			start = 0, speed = 1, active = false,
-		}
-		states[character] = s
-	end
-	return s
+local function newDriver(character)
+	return {
+		rig = findRig(character), pose = newPose(), from = newPose(), blendTime = 1, blendLength = 0.1,
+		playKey = "", move = nil, start = 0, speed = 1,
+	}
 end
 
 local function startBlend(s, length)
@@ -3563,34 +3542,13 @@ local function startBlend(s, length)
 	s.blendLength = length
 end
 
-local function update(character, tool, dt)
-	local s = stateOf(character)
-	if not tool then
-		if s.active then
-			restore(s.rig)
-			s.active = false
-			s.move = nil
-			s.playKey = ""
-			copyPose(zero, s.pose)
-		end
-		return
-	end
-
-	local raw = tool:GetAttribute("SFMoves")
-	if raw ~= s.movesKey then
-		s.movesKey = raw
-		local ok, decoded = pcall(HttpService.JSONDecode, HttpService, raw)
-		s.moves = ok and decoded or {}
-		for _, move in pairs(s.moves) do
-			prepare(move)
-		end
-	end
-
+-- one frame: reads what the sword says is playing (attributes SFPlay / SFIdle) and turns the joints
+local function stepDriver(s, character, tool, dt)
 	local play = tool:GetAttribute("SFPlay") or ""
 	if play ~= s.playKey then
 		s.playKey = play
 		local id, start, speed = string.match(play, "^([^|]*)|([^|]*)|([^|]*)")
-		local move = id and s.moves[id]
+		local move = id and ANIMATION.moves[id]
 		if move then
 			startBlend(s, move.hit and 0.08 or 0.12)
 			s.move, s.start, s.speed = move, tonumber(start) or 0, tonumber(speed) or 1
@@ -3599,7 +3557,7 @@ local function update(character, tool, dt)
 		end
 	end
 
-	local target = scratch
+	local target = scratchPose
 	local found = false
 	if s.move then
 		local u = (workspace:GetServerTimeNow() - s.start) * s.speed / s.move.dur
@@ -3612,11 +3570,11 @@ local function update(character, tool, dt)
 		end
 	end
 	if not found then
-		local idle = s.moves[tool:GetAttribute("SFIdle") or ""]
+		local idle = ANIMATION.moves[tool:GetAttribute("SFIdle") or ""]
 		if idle then
 			poseAt(idle, (os.clock() / idle.dur) % 1, target)
 		else
-			copyPose(zero, target)
+			copyPose(zeroPose, target)
 		end
 	end
 
@@ -3627,39 +3585,13 @@ local function update(character, tool, dt)
 	else
 		copyPose(target, s.pose)
 	end
-
-	s.active = true
 	applyPose(s.rig, s.pose)
 	applyGrip(s.rig, character, s.pose)
 end
 
-local warned = false
-RunService.RenderStepped:Connect(function(dt)
-	for _, player in ipairs(Players:GetPlayers()) do
-		local character = player.Character
-		if character then
-			local tool = character:FindFirstChildOfClass("Tool")
-			if tool and tool:GetAttribute("SFMoves") == nil then
-				tool = nil -- a sword that does not use animations
-			end
-			local humanoid = character:FindFirstChildOfClass("Humanoid")
-			if humanoid and humanoid.Health <= 0 then
-				tool = nil
-			end
-			local ok, err = pcall(update, character, tool, dt)
-			if not ok and not warned then
-				warned = true
-				warn("[SwordForgeAnimator] " .. tostring(err))
-			end
-		end
-	end
-end)
-`;
-
-  // set by the delivery code once the animator LocalScript is known to exist
-  E.animFlag = String.raw`-- animations: the server only says which move starts and when; the SwordForgeAnimator LocalScript
--- (see the bottom of this script) turns the joints on every screen. No animator = Roblox's normal swing.
-local animatorReady = false`;
+for _, move in pairs(ANIMATION.moves) do
+	prepare(move)
+end`;
 
   // inside setupCombat
   E.animServer = (A) => String.raw`
@@ -3668,11 +3600,33 @@ local animatorReady = false`;
 	local moveCounter = 0
 ${A.swings ? `	local animStep = 0
 	local comboLength = math.max(#ANIMATION.swings, 3)
-` : ''}	pcall(function()
-		tool:SetAttribute("SFMoves", game:GetService("HttpService"):JSONEncode(ANIMATION.moves))
-	end)
+` : ''}
+	-- turns the wielder's joints while the sword is held
+	local driverState, driverConnection
+	local function stopDriver()
+		if driverConnection then
+			driverConnection:Disconnect()
+			driverConnection = nil
+		end
+		if driverState then
+			restore(driverState.rig)
+			driverState = nil
+		end
+	end
+	local function startDriver()
+		stopDriver()
+		local state = newDriver(character)
+		driverState = state
+		driverConnection = RunService.Heartbeat:Connect(function(dt)
+			local ok, err = pcall(stepDriver, state, character, tool, dt)
+			if not ok then
+				warn("[SwordForge] animation stopped: " .. tostring(err))
+				stopDriver()
+			end
+		end)
+	end
 
-	-- starts a move on every screen and returns how long it lasts (seconds)
+	-- starts a move and returns how long it lasts (seconds)
 	local function playMove(id)
 		local data = ANIMATION.moves[id]
 		if not data then
@@ -3683,47 +3637,6 @@ ${A.swings ? `	local animStep = 0
 		return data.dur / ANIMATION.speed
 	end
 `;
-
-  // command bar mode: the animator goes to StarterPlayerScripts so every player runs it
-  E.installAnimator = String.raw`-- the animator plays the moves on every screen
-local starterScripts = game:GetService("StarterPlayer"):FindFirstChild("StarterPlayerScripts")
-if starterScripts then
-	local oldAnimator = starterScripts:FindFirstChild("SwordForgeAnimator")
-	if oldAnimator then
-		oldAnimator:Destroy()
-	end
-	local animator = Instance.new("LocalScript")
-	animator.Name = "SwordForgeAnimator"
-	animator.Source = ANIMATOR_SOURCE
-	animator.Parent = starterScripts
-else
-	warn("[SwordForge] Could not find StarterPlayerScripts, so the animations will not play.")
-end`;
-
-  // script mode: every player gets a copy of the LocalScript that sits inside this Script
-  E.animatorInstall = String.raw`-- the animator: a LocalScript named SwordForgeAnimator inside THIS Script. Every player gets a copy.
-local animatorTemplate = script and script:FindFirstChild("SwordForgeAnimator")
-if animatorTemplate and animatorTemplate:IsA("LocalScript") then
-	animatorReady = true
-	local function giveAnimator(player)
-		local gui = player:WaitForChild("PlayerGui", 30)
-		if gui and not gui:FindFirstChild("SwordForgeAnimator") then
-			local copy = animatorTemplate:Clone()
-			pcall(function()
-				copy.Disabled = false
-			end)
-			copy.Parent = gui
-		end
-	end
-	Players.PlayerAdded:Connect(function(player)
-		task.spawn(giveAnimator, player)
-	end)
-	for _, player in ipairs(Players:GetPlayers()) do
-		task.spawn(giveAnimator, player)
-	end
-else
-	warn("[SwordForge] This sword has animations, but there is no LocalScript named SwordForgeAnimator inside this Script yet. Until you add it, the sword uses Roblox's normal swing. (Easiest: use the 'Studio file' download, it already has it.)")
-end`;
 
   /* ----------------------------------------------------------------- delivery (runtime mode) */
   E.delivery = String.raw`-- gives every player a fresh copy of the sword each time they spawn
@@ -3953,6 +3866,7 @@ print("[SwordForge] Built '" .. tool.Name .. "' in StarterPack. Press Play to tr
     SF.ENCHANT_IDS.forEach((id) => {
       if (names.includes(id)) blocks.push(e.enchants[id]);
     });
+    if (d.anim) blocks.push(e.animMath);
     blocks.push(d.needsLoops ? e.loops : e.loopsStub);
     const A = d.anim ? { swings: d.anim.swings.length > 0 } : null;
     blocks.push(e.combatA(A) + (d.wave ? e.wave : e.waveStub) + '\n' + e.combatB(A));
@@ -4036,9 +3950,7 @@ print("[SwordForge] Built '" .. tool.Name .. "' in StarterPack. Press Play to tr
         '-- ENCHANT_CFG and CONFIG below, then press Play again.',
       ].concat(d.anim ? [
         '--',
-        '-- ANIMATIONS: this sword moves your character (swings, stance, flourish). That needs one more piece:',
-        '--   inside this Script, add a LocalScript named  SwordForgeAnimator  and paste the animator code into it.',
-        '--   (Skip it and the sword still works with Roblox\'s normal swing. The "Studio file" download has it built in.)',
+        '-- ANIMATIONS: this sword moves your character (swings, stance, flourish). It is all in this one script.',
       ] : []).join('\n'));
     } else {
       out.push([
@@ -4051,7 +3963,7 @@ print("[SwordForge] Built '" .. tool.Name .. "' in StarterPack. Press Play to tr
         '--      Press Play and it is in your hotbar. You can now edit its parts,',
         '--      change Attributes (damage ...) or save it to your Toolbox.',
       ].concat(d.anim ? [
-        '--   It also adds a LocalScript called SwordForgeAnimator to StarterPlayerScripts: that is what plays the animations.',
+        '--   The animations live inside the sword\'s own script, so they go wherever the Tool goes.',
       ] : []).join('\n'));
     }
 
@@ -4080,7 +3992,6 @@ print("[SwordForge] Built '" .. tool.Name .. "' in StarterPack. Press Play to tr
       out.push('\n' + banner('4. COMBAT', 'Swings, damage and special powers.') + '\n');
       out.push(combat);
       out.push('\n' + banner('5. GIVE THE SWORD TO PLAYERS') + '\n');
-      if (d.anim) out.push(e.animatorInstall + '\n');
       out.push(e.delivery);
     } else {
       // the combat code becomes the Script that lives inside the Tool
@@ -4092,7 +4003,7 @@ print("[SwordForge] Built '" .. tool.Name .. "' in StarterPack. Press Play to tr
         '',
         pruneHelpers(e.helpers, combat),
         '',
-        d.anim ? combat.replace('local animatorReady = false', 'local animatorReady = true -- the builder also puts SwordForgeAnimator into StarterPlayerScripts') : combat,
+        combat,
         '',
         'setupCombat(script.Parent)',
         '',
@@ -4100,18 +4011,13 @@ print("[SwordForge] Built '" .. tool.Name .. "' in StarterPack. Press Play to tr
       const eq = pickDelimiter(chunk);
       out.push('\n' + banner('4. THE SCRIPT THAT GOES INSIDE THE TOOL') + '\n');
       out.push('local COMBAT_SOURCE = [' + eq + '[\n' + chunk + ']' + eq + ']');
-      if (d.anim) {
-        const aeq = pickDelimiter(e.animator);
-        out.push('\n' + banner('4b. THE ANIMATOR (a LocalScript that turns the joints)') + '\n');
-        out.push('local ANIMATOR_SOURCE = [' + aeq + '[\n' + e.animator + ']' + aeq + ']');
-      }
       out.push('\n' + banner('5. BUILD IT') + '\n');
-      out.push(e.install + (d.anim ? '\n' + e.installAnimator : ''));
+      out.push(e.install);
     }
 
     const code = out.join('\n').replace(/\n{3,}/g, '\n\n') + '\n';
     return {
-      code, mode, model, animator: d.anim ? e.animator : null,
+      code, mode, model,
       lines: code.split('\n').length - 1,
       bytes: code.length,
     };
@@ -4144,22 +4050,15 @@ print("[SwordForge] Built '" .. tool.Name .. "' in StarterPack. Press Play to tr
   const xmlText = (s) => String(s).replace(/[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const cdata = (s) => '<![CDATA[' + String(s).replace(/[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD]/g, '').replace(/\]\]>/g, ']]]]><![CDATA[>') + ']]>';
 
-  // One Script instance (drop it on ServerScriptService and it hands the sword to every player).
-  // A sword with animations also gets the SwordForgeAnimator LocalScript as a child of that Script.
+  // One Script instance: drop it on ServerScriptService and it hands the sword to every player.
   SF.rbxmx = function (cfg) {
     const gen = SF.generate(cfg, 'script');
     const name = (gen.model.cfg.name || 'Sword') + ' (Sword Forge)';
-    const child = gen.animator
-      ? '\t\t<Item class="LocalScript" referent="RBX1">\n\t\t\t<Properties>\n' +
-        '\t\t\t\t<string name="Name">SwordForgeAnimator</string>\n' +
-        '\t\t\t\t<ProtectedString name="Source">' + cdata(gen.animator) + '</ProtectedString>\n' +
-        '\t\t\t</Properties>\n\t\t</Item>\n'
-      : '';
     return '<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">\n' +
       '\t<Item class="Script" referent="RBX0">\n\t\t<Properties>\n' +
       '\t\t\t<string name="Name">' + xmlText(name) + '</string>\n' +
       '\t\t\t<ProtectedString name="Source">' + cdata(gen.code) + '</ProtectedString>\n' +
-      '\t\t</Properties>\n' + child + '\t</Item>\n</roblox>\n';
+      '\t\t</Properties>\n\t</Item>\n</roblox>\n';
   };
   SF.rbxmxFileName = (cfg) => ((cfg.name || 'Sword').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'Sword') + '.rbxmx';
 
@@ -6987,11 +6886,7 @@ void main() {
   /* ------------------------------------------------------------ export dialog */
   let codeTimer = 0;
   let lastGen = null;
-  let exportPart = 'sword';                       // which script the code view shows: 'sword' or 'animator'
-  const shownText = () => {
-    const gen = lastGen || SF.generate(state.cfg, state.mode);
-    return exportPart === 'animator' && gen.animator && state.mode === 'script' ? gen.animator : gen.code;
-  };
+  const shownText = () => (lastGen || SF.generate(state.cfg, state.mode)).code;
   const exportOpen = () => $('#export-dlg').open;
   function scheduleCode() { clearTimeout(codeTimer); codeTimer = setTimeout(updateCode, 140); }
 
@@ -7000,15 +6895,6 @@ void main() {
     if (!dlg.open) return;
     const gen = SF.generate(state.cfg, state.mode);
     lastGen = gen;
-    const tabs = $('.part-tabs', dlg);
-    const hasTabs = !!gen.animator && state.mode === 'script';
-    if (tabs) {
-      tabs.hidden = !hasTabs;
-      if (!hasTabs) exportPart = 'sword';
-      [...tabs.children].forEach((b, i) => b.setAttribute('aria-pressed', String(['sword', 'animator'][i] === exportPart)));
-      const copyLab = $('.copy-lab', dlg);
-      if (copyLab) copyLab.textContent = hasTabs && exportPart === 'animator' ? 'Copy animator' : 'Copy script';
-    }
     const text = shownText();
     const pre = $('.code', dlg), gut = $('.gut', dlg);
     pre.innerHTML = highlight(text);
@@ -7036,17 +6922,15 @@ void main() {
   function openExport() {
     const dlg = $('#export-dlg');
     dlg.innerHTML = '';
-    exportPart = 'sword';
     const stepsEl = h('ol', { class: 'steps' });
     const modeNote = h('p', { class: 'hint-text', style: { marginTop: '8px' } });
-    const animated = !!SF.animData(state.cfg.anim);
     const paintSteps = () => {
       stepsEl.innerHTML = '';
       const S = state.mode === 'script' ? [
         ['Open your game', 'Open Roblox Studio and your place. Show the Explorer (View > Explorer).'],
         ['Add a Script', 'Hover ServerScriptService, click the + and choose Script. Delete the line of code it starts with.'],
         ['Paste and press Play', 'Paste everything you copied. Press Play, then press 1 and click to swing.'],
-      ].concat(animated ? [['Add the animator', 'For the animations: right-click your new Script > Insert Object > LocalScript, name it SwordForgeAnimator, then copy the Animator tab here and paste it in. (Or use the Studio file: it has it built in.)']] : []) : [
+      ] : [
         ['Open the Command Bar', 'In Studio choose View > Command Bar.'],
         ['Paste and press Enter', 'Paste everything you copied into the bar and press Enter.'],
         ['Find your sword', 'It appears in StarterPack. Press Play to try it, or edit its parts first.'],
@@ -7075,7 +6959,7 @@ void main() {
       if (ok) toast('Copied! Now paste it into Studio.', 'good', 'copy');
       else { selectCode(); toast('Press Ctrl+C to copy the selected code', 'warn', 'help'); }
     };
-    const copyBtn = h('button', { type: 'button', class: 'btn primary', onclick: doCopy }, iconEl('copy', 17), h('span', { class: 'copy-lab' }, 'Copy script'));
+    const copyBtn = h('button', { type: 'button', class: 'btn primary', onclick: doCopy }, iconEl('copy', 17), 'Copy script');
     // Studio file: a .rbxmx you drag into Explorer. The Artifact viewer blocks plain downloads, so it goes through the `downloads` capability as a .zip.
     const studioBtn = h('button', { type: 'button', class: 'btn', title: 'A file you drag into Roblox Studio, no copy and paste', onclick: async () => {
       try {
@@ -7089,8 +6973,7 @@ void main() {
     } }, iconEl('download', 17), ENV.canDownload ? 'Studio file (.rbxmx)' : 'Studio file (.zip)');
     const dlBtn = ENV.canDownload ? h('button', { type: 'button', class: 'btn', onclick: () => {
       const base = state.cfg.name.replace(/[^A-Za-z0-9]+/g, '_') || 'Sword';
-      if (exportPart === 'animator' && state.mode === 'script') downloadText('SwordForgeAnimator.client.lua', shownText());
-      else downloadText(base + (state.mode === 'script' ? '.server.lua' : '_builder.lua'), shownText());
+      downloadText(base + (state.mode === 'script' ? '.server.lua' : '_builder.lua'), shownText());
     } }, iconEl('download', 17), 'Download .lua') : null;
 
     dlg.append(
@@ -7115,10 +6998,6 @@ void main() {
         ),
         h('div', { class: 'sheet-main' },
           h('div', { class: 'code-bar' }, copyBtn, studioBtn, dlBtn, h('span', { class: 'grow' }), h('span', { class: 'code-meta' })),
-          h('div', { class: 'part-row' },
-            h('div', { class: 'seg part-tabs', role: 'group', 'aria-label': 'Which script to show', hidden: true },
-              h('button', { type: 'button', 'aria-pressed': 'true', onclick: () => { exportPart = 'sword'; updateCode(); } }, 'Sword Script'),
-              h('button', { type: 'button', 'aria-pressed': 'false', onclick: () => { exportPart = 'animator'; updateCode(); } }, 'Animator (LocalScript)'))),
           h('div', { class: 'code-wrap', tabindex: '0', 'aria-label': 'Generated Luau script' }, h('pre', { class: 'gut', 'aria-hidden': 'true' }), h('pre', { class: 'code' }))
         )
       )

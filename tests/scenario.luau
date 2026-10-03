@@ -70,28 +70,6 @@ else
 	end
 end
 
------------------------------------------------------------------- animations: the server side + starting the animator
-local animatorScript
-if ANIM then
-	local found
-	if EXPECT.mode == "commandbar" then
-		found = game:GetService("StarterPlayer").StarterPlayerScripts:FindFirstChild("SwordForgeAnimator")
-		check(found ~= nil and found:IsA("LocalScript"), "the builder put SwordForgeAnimator into StarterPlayerScripts")
-	elseif not EXPECT.animatorMissing then
-		local gui = player:FindFirstChild("PlayerGui")
-		found = gui and gui:FindFirstChild("SwordForgeAnimator")
-		check(found ~= nil and found:IsA("LocalScript"), "the player got a copy of the animator in PlayerGui")
-	end
-	if found then
-		check(#found.Source > 2000, "the animator has its source")
-		animatorScript = found
-		-- what Roblox does for a LocalScript in PlayerGui / StarterPlayerScripts: it starts running
-		__runSource(found.Source, found)
-		Mock.run(0.1)
-		check(_G.SwordForgeAnimator == true, "the animator started")
-	end
-end
-
 ------------------------------------------------------------------ structure
 local handle = tool:FindFirstChild("Handle")
 local hitbox = tool:FindFirstChild("Hitbox")
@@ -113,16 +91,7 @@ check(partCount == EXPECT.partCount, "part count " .. partCount .. " == " .. EXP
 check(weldCount == EXPECT.partCount + 1, "one weld per part plus the hitbox")
 check(tool:GetAttribute("Damage") == EXPECT.damage, "Damage attribute is set")
 check(tool:GetAttribute("SwingStyle") == EXPECT.swing, "SwingStyle attribute is set")
-if ANIM then
-	local raw = tool:GetAttribute("SFMoves")
-	check(type(raw) == "string", "SFMoves (the moves, as JSON) is set on the tool")
-	local moves = type(raw) == "string" and game:GetService("HttpService"):JSONDecode(raw) or {}
-	for id, info in pairs(ANIM.moves) do
-		check(moves[id] ~= nil and math.abs(moves[id].dur - info.dur) < 1e-6 and #moves[id].keys == info.keys, "move " .. id .. " survived the JSON round trip")
-	end
-else
-	check((tool:GetAttribute("SFMoves") ~= nil) == EXPECT.hasAnim, "SFMoves is set exactly when the sword has animations")
-end
+check(tool:GetAttribute("SFPlay") == nil or EXPECT.anim ~= nil, "only animated swords carry animation attributes")
 
 local trails = descendantsOfClass(tool, "Trail")
 local swingTrails, alwaysTrails = 0, 0
@@ -167,7 +136,7 @@ end
 tool.Parent = character
 Mock.run(0.3)
 check(tool.Parent == character, "tool is equipped")
-if ANIM and animatorScript then
+if ANIM then
 	check(tool:GetAttribute("SFIdle") == ANIM.idle, "SFIdle is the idle stance (" .. tostring(tool:GetAttribute("SFIdle")) .. ")")
 	local play = tool:GetAttribute("SFPlay") or ""
 	if ANIM.equip ~= "" then
@@ -426,7 +395,7 @@ if EXPECT.wave ~= "off" then
 end
 
 ------------------------------------------------------------------ the animator turns the joints (R6 and R15), checked against the JS pose math
-if ANIM and animatorScript then
+if ANIM then
 	local function mat(t)
 		return CFrame.new(0, 0, 0, t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9])
 	end
@@ -466,8 +435,8 @@ if ANIM and animatorScript then
 		return out
 	end
 
-	-- a second player with an R15 body holding a bare tool that carries the same moves
-	local player2 = Mock.makePlayer("Tester15")
+	-- a second player with an R15 body and a sword of their own
+	local player2, backpack2 = Mock.makePlayer("Tester15")
 	local character15, humanoid15 = Mock.spawnCharacter(player2, Vector3.new(30, 3, 0))
 	humanoid15.MaxHealth = 1000000
 	local rig15 = Mock.makeRig(character15, "R15")
@@ -475,10 +444,21 @@ if ANIM and animatorScript then
 	for key, joint in pairs(rig15) do
 		orig15[key] = joint.C0
 	end
-	local tool15 = Instance.new("Tool")
-	tool15.Name = "R15Sword"
-	tool15:SetAttribute("SFMoves", tool:GetAttribute("SFMoves"))
-	tool15.Parent = player2.Backpack
+	Mock.run(0.6)
+	local tool15
+	if EXPECT.mode == "commandbar" then
+		tool15 = StarterPack:FindFirstChild(EXPECT.name):Clone()
+		tool15.Parent = backpack2
+		local sc = descendantsOfClass(tool15, "Script")[1]
+		__runSource(sc.Source, sc)
+		Mock.run(0.1)
+	else
+		tool15 = backpack2:FindFirstChild(EXPECT.name)
+	end
+	check(tool15 ~= nil, "the second player got a sword too")
+	if not tool15 then
+		return
+	end
 	tool15.Parent = character15
 	Mock.run(0.2)
 
@@ -509,7 +489,7 @@ if ANIM and animatorScript then
 	end
 
 	-- both bodies are moved by the animator at the same time, and putting the sword away restores them
-	tool15.Parent = player2.Backpack
+	tool15.Parent = backpack2
 	Mock.run(0.3)
 	local restored = true
 	for key, joint in pairs(rig15) do
@@ -518,14 +498,13 @@ if ANIM and animatorScript then
 		end
 	end
 	check(restored, "R15 joints are restored when the sword is put away")
-	tool15:Destroy()
 end
 
 ------------------------------------------------------------------ unequip + cleanup
 tool.Parent = backpack
 Mock.run(0.4)
 check((tool.Grip.LookVector - baseLook).Magnitude < 1e-6, "grip restored on unequip")
-if ANIM and animatorScript then
+if ANIM then
 	local restored6 = true
 	for key, joint in pairs(rig6) do
 		local o = orig6[key]
@@ -570,12 +549,6 @@ check(#character:GetChildren() >= 3, "character still has its parts")
 for _, err in ipairs(Mock.errors) do
 	check(false, "script error: " .. err)
 end
-local expectedWarnings = EXPECT.animatorMissing and 1 or 0
 for _, w in ipairs(Mock.warnings) do
-	if expectedWarnings > 0 and string.find(w, "no LocalScript named SwordForgeAnimator", 1, true) then
-		expectedWarnings -= 1
-	else
-		check(false, "warning: " .. w)
-	end
+	check(false, "warning: " .. w)
 end
-check(expectedWarnings == 0, "the missing-animator warning appeared exactly once when expected")
